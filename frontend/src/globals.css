@@ -1,0 +1,380 @@
+/* 
+ * Global Styles - Premium Sports Theme
+ * Mobile-first responsive design with dark mode and vibrant accents
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+ * BASE STYLES - Mobile First
+ * ============================================================================ */
+
+/* Reset and normalize */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Root font size - scales everything */
+html {
+  font-size: 16px; /* Base: 1rem = 16px */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+}
+
+/* Responsive root font scaling */
+@media (min-width: 768px) {
+  html {
+    font-size: 17px;
+  }
+}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+/* Base body - mobile first */
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  font-size: clamp(0.875rem, 1vw, 1rem);
+  overflow-x: hidden;
+}
+
+/* Interactive elements - large tap targets on mobile */
+button, a, [role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 44px; /* Minimum touch target size */
+  min-width: 44px;
+}
+
+@media (min-width: 1024px) {
+  button, a, [role="button"] {
+    min-height: auto;
+    min-width: auto;
+  }
+}
+
+/* Flexible images and media */
+img, video, svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+:root {
+  --color-primary: #0a0a0a;
+  --color-primary-hover: #171717;
+  --color-primary-light: #262626;
+  --color-secondary: #0a0a0a;
+  --color-secondary-light: #171717;
+  --color-accent: #00d4ff;
+  --color-accent-hover: #00b8e6;
+  --color-accent-light: #00d4ff20;
+  --color-success: #00ff88;
+  --color-success-light: #00ff8815;
+  --color-warning: #ffb800;
+  --color-warning-light: #ffb80015;
+  --color-danger: #ff3b5c;
+  --color-danger-light: #ff3b5c15;
+  --color-background: #000000;
+  --color-surface: #0d0d0d;
+  --color-surface-hover: #1a1a1a;
+  --color-border: #262626;
+  --color-border-light: #333333;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #737373;
+  --color-text-on-primary: #000000;
+  --color-text-on-dark: #ffffff;
+}
+
+/* Base body */
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.3); }
+  50% { box-shadow: 0 0 30px rgba(0, 212, 255, 0.5); }
+}
+
+@keyframes pulse-accent {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.6s ease-out forwards;
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* Utility Classes */
+.bg-primary { background-color: var(--color-primary); }
+.bg-surface { background-color: var(--color-surface); }
+.bg-background { background-color: var(--color-background); }
+.bg-accent { background-color: var(--color-accent); }
+
+.text-primary { color: var(--color-text-primary); }
+.text-secondary { color: var(--color-text-secondary); }
+.text-accent { color: var(--color-accent); }
+
+.border-theme { border-color: var(--color-border); }
+
+/* Gradient backgrounds */
+.gradient-hero {
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.8) 50%, rgba(0,0,0,1) 100%);
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, var(--color-accent) 0%, #0088ff 100%);
+}
+
+.gradient-card {
+  background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-primary) 100%);
+}
+
+/* Card styles */
+.card-theme {
+  background-color: var(--color-surface);
+  border-radius: 1rem;
+  border: 1px solid var(--color-border);
+  transition: all 0.3s ease;
+}
+
+.card-theme:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.1);
+}
+
+/* Button styles */
+.btn-primary {
+  background: linear-gradient(135deg, var(--color-accent) 0%, #0088ff 100%);
+  color: #000000;
+  font-weight: 600;
+  border-radius: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 212, 255, 0.3);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+}
+
+/* Dialog & Form Styling */
+[data-radix-dialog-content],
+.dialog-content {
+  background-color: #0d0d0d !important;
+  border-color: #262626 !important;
+  color: #fff !important;
+}
+
+[data-radix-dialog-content] input,
+[data-radix-dialog-content] textarea,
+[data-radix-dialog-content] select,
+.dialog-content input,
+.dialog-content textarea {
+  background-color: #171717 !important;
+  border-color: #333 !important;
+  color: #fff !important;
+}
+
+[data-radix-dialog-content] input::placeholder,
+[data-radix-dialog-content] textarea::placeholder {
+  color: #737373 !important;
+}
+
+[data-radix-dialog-content] label,
+.dialog-content label {
+  color: #a3a3a3 !important;
+}
+
+/* Select trigger */
+[data-radix-select-trigger] {
+  background-color: #171717 !important;
+  border-color: #333 !important;
+  color: #fff !important;
+}
+
+/* Select content dropdown */
+[data-radix-select-content],
+[data-radix-popper-content-wrapper] [role="listbox"] {
+  background-color: #0d0d0d !important;
+  border-color: #262626 !important;
+}
+
+[data-radix-select-item] {
+  color: #fff !important;
+}
+
+[data-radix-select-item]:hover,
+[data-radix-select-item][data-highlighted] {
+  background-color: #1a1a1a !important;
+  color: var(--color-accent) !important;
+}
+
+/* Outline buttons */
+.btn-outline,
+button[class*="border-slate"],
+button.border-slate-700 {
+  border-color: #333 !important;
+  color: #a3a3a3 !important;
+  background-color: transparent !important;
+}
+
+button[class*="border-slate"]:hover,
+button.border-slate-700:hover {
+  background-color: #1a1a1a !important;
+  color: var(--color-accent) !important;
+  border-color: var(--color-accent) !important;
+}
+
+[data-radix-dialog-content] button[class*="outline"],
+.dialog-content button[class*="outline"] {
+  border-color: #333 !important;
+  color: #a3a3a3 !important;
+}
+
+[data-radix-dialog-content] button[class*="outline"]:hover {
+  background-color: #1a1a1a !important;
+  color: var(--color-accent) !important;
+}
+
+/* Tab trigger active state - remove default shadcn background */
+[role="tablist"] {
+  background-color: transparent !important;
+}
+
+[role="tablist"] [data-state="active"] {
+  background-color: var(--color-accent) !important;
+  color: #000 !important;
+  box-shadow: none !important;
+}
+
+[role="tablist"] [data-state="inactive"] {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Remove the indicator/underline behind tabs */
+[role="tablist"]::before,
+[role="tablist"]::after,
+[role="tablist"] > span,
+[data-radix-collection-item]::before,
+[data-radix-collection-item]::after {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* Override shadcn tabs default muted background on active triggers */
+[role="tab"][data-state="active"]::before,
+[role="tab"][data-state="active"]::after,
+button[data-state="active"]::before,
+button[data-state="active"]::after {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* Remove any internal wrapper backgrounds */
+[data-radix-collection-item] > *,
+[role="tab"] > * {
+  background: transparent !important;
+}
+
+/* Shadcn TabsList has an internal bg-muted class - override it completely */
+[role="tablist"].bg-muted,
+[role="tablist"][class*="bg-muted"],
+[data-orientation="horizontal"][role="tablist"] {
+  background-color: transparent !important;
+}
+
+/* The TabsTrigger has data-state styling from shadcn - force override */
+[role="tab"][data-state="active"] {
+  background-color: var(--color-accent) !important;
+  color: #000 !important;
+}
+
+[role="tab"][data-state="inactive"] {
+  background-color: transparent !important;
+}
+
+/* Focus states */
+input:focus, textarea:focus, select:focus, button:focus {
+  outline: none;
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2) !important;
+}
+
+/* Live indicator */
+.live-pulse {
+  animation: pulse-accent 1.5s ease-in-out infinite;
+}
+
+/* Status badges */
+.badge-live {
+  background-color: var(--color-danger);
+  color: white;
+  animation: pulse-accent 1.5s ease-in-out infinite;
+}
+
+.badge-success {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.badge-warning {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.badge-danger {
+  background-color: var(--color-danger-light);
+  color: var(--color-danger);
+}

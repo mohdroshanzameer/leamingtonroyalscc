@@ -1,0 +1,208 @@
+# Application Startup Flow Diagram
+
+## Overview
+This diagram shows how the application initializes and which files call which during startup.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         index.html                              │
+│                            ↓                                     │
+│                        main.jsx                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                         App.jsx                                 │
+│  • Initializes QueryClient                                      │
+│  • Sets up Socket.IO connection (socketClient.connect())        │
+│  • Wraps app in providers                                       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+        ┌─────────────────────┼─────────────────────┐
+        ↓                     ↓                     ↓
+┌──────────────┐   ┌──────────────────┐   ┌────────────────┐
+│ BrowserRouter│   │ QueryClientProvider│   │ AuthProvider   │
+└──────────────┘   └──────────────────┘   └────────────────┘
+                                                    ↓
+                                    ┌───────────────────────────┐
+                                    │ api.auth.me()             │
+                                    │ Fetches current user      │
+                                    └───────────────────────────┘
+                                                    ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                   components/api/apiClient.js                   │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐│
+│  │ httpClient   │  │  authApi     │  │  entitiesApi         ││
+│  │              │  │              │  │                      ││
+│  │ • Base fetch │→ │ • login()    │  │ • Generic CRUD for  ││
+│  │ • Token mgmt │  │ • register() │  │   all entities      ││
+│  │ • Error log  │  │ • me()       │  │ • list(), create()  ││
+│  └──────────────┘  │ • updateMe() │  │ • update(), delete()││
+│                    │ • logout()   │  │                      ││
+│                    └──────────────┘  └──────────────────────┘│
+│                            ↓                                    │
+│                    Makes HTTP requests to:                     │
+│                    http://localhost:5000/api                   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│              Backend: server-with-socketio.js                   │
+│                                                                 │
+│  ┌────────────────────────────────────────────────────────┐   │
+│  │ Express.js + Socket.IO Server                          │   │
+│  │                                                        │   │
+│  │ • Auth routes: /api/auth/login, /api/auth/me          │   │
+│  │ • Entity routes: /api/entities/:entityName             │   │
+│  │ • Socket.IO events: entity_created, entity_updated     │   │
+│  │ • PostgreSQL connection                                │   │
+│  └────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Parallel Initialization
+
+```
+App.jsx starts simultaneously:
+    │
+    ├─→ Socket.IO Client connects
+    │   └─→ socketClient.js
+    │       └─→ io('http://localhost:5000')
+    │
+    ├─→ AuthProvider loads user
+    │   └─→ api.auth.me()
+    │       └─→ authApi.me()
+    │           └─→ httpClient.request('/auth/me')
+    │               └─→ Backend: GET /api/auth/me
+    │
+    └─→ Router renders current page
+        └─→ Layout.js wraps page content
+            └─→ Also calls api.auth.me() for nav
+```
+
+## Key File Dependencies
+
+### Frontend Core
+```
+App.jsx
+  ├── imports: socketClient.js
+  ├── imports: AuthProvider
+  └── imports: AppRouter
+
+AuthProvider
+  └── imports: apiClient.js
+      └── exports: { api }
+          ├── auth (from authApi.js)
+          ├── entities (from entitiesApi.js)
+          └── integrations (from integrationsApi.js)
+
+Layout.js
+  └── imports: apiClient.js
+      └── uses: api.auth.me(), api.auth.logout()
+```
+
+### API Layer
+```
+apiClient.js (main export)
+  ├── httpClient.js
+  │   └── Handles: fetch(), token storage, error logging
+  ├── authApi.js
+  │   └── Endpoints: login, register, me, updateMe, logout
+  ├── entitiesApi.js
+  │   └── Generic: list, filter, create, update, delete
+  └── integrationsApi.js
+      └── LLM, Email, File Upload
+```
+
+### Backend
+```
+server-with-socketio.js
+  ├── Express app
+  ├── Socket.IO server
+  ├── PostgreSQL pool
+  ├── JWT middleware
+  └── Routes:
+      ├── POST /api/auth/login
+      ├── POST /api/auth/register
+      ├── GET  /api/auth/me
+      ├── PUT  /api/auth/me
+      ├── GET  /api/entities/:entityName
+      ├── POST /api/entities/:entityName
+      ├── PUT  /api/entities/:entityName/:id
+      └── DELETE /api/entities/:entityName/:id
+```
+
+## Real-time Updates Flow
+
+```
+Frontend Component
+    │
+    ├─→ Creates/Updates entity via api.entities.EntityName.create(data)
+    │       ↓
+    │   apiClient → POST /api/entities/EntityName
+    │       ↓
+    │   Backend receives request
+    │       ↓
+    │   Saves to PostgreSQL
+    │       ↓
+    │   Emits Socket.IO event: 'EntityName_created'
+    │       ↓
+    └─→ Socket.IO Client receives event
+            ↓
+        React Query invalidates cache
+            ↓
+        UI auto-updates
+```
+
+## Authentication Flow
+
+```
+User visits app
+    ↓
+App.jsx renders
+    ↓
+AuthProvider calls api.auth.me()
+    ↓
+    ├─→ Token exists in localStorage?
+    │   ├─ YES → Send GET /api/auth/me with token
+    │   │         ↓
+    │   │      Backend verifies JWT
+    │   │         ↓
+    │   │      Returns user data
+    │   │         ↓
+    │   │      User logged in ✓
+    │   │
+    │   └─ NO → Returns null
+    │             ↓
+    │          User not logged in
+    │             ↓
+    │          Shows "Login" button
+    │
+    User clicks Login
+    ↓
+Navigate to SignIn page
+    ↓
+User enters credentials
+    ↓
+api.auth.login({ email, password })
+    ↓
+Backend: POST /api/auth/login
+    ↓
+Verify password with bcrypt
+    ↓
+Generate JWT token
+    ↓
+Return { user, token }
+    ↓
+Frontend stores token in localStorage
+    ↓
+Redirect to home
+    ↓
+User logged in ✓
+```
+
+## No Base44 SDK
+**All Base44 references removed:**
+- ❌ `@base44/sdk` package
+- ❌ `src/api/base44Client.js` file
+- ✅ Local `apiClient.js` used instead
+- ✅ Direct backend connection: `http://localhost:5000
