@@ -25,9 +25,10 @@ import EventManager from '../components/admin/EventManager';
 import NotificationManager from '../components/admin/NotificationManager';
 import UserManager from '../components/admin/UserManager';
 import { Link } from 'react-router-dom';
-import { createPageUrl } from '../utils';
-import { CLUB_CONFIG } from '@/components/ClubConfig';
+import { createPageUrl } from '../components/utils';
+import { CLUB_CONFIG, getFinanceTheme } from '@/components/ClubConfig';
 
+const colors = getFinanceTheme();
 const ADMIN_ACCENT = '#c4b5fd'; // Purple accent for admin
 const ADMIN_ACCENT_LIGHT = 'rgba(196,181,253,0.15)';
 
@@ -41,17 +42,12 @@ export default function Admin() {
     let mounted = true;
     api.auth.me()
       .then(u => { if (mounted) setUser(u); })
-      .catch((err) => {
-        if (!mounted) return;
-        if (err?.status === 401 || err?.status === 403) return api.auth.redirectToLogin();
-        console.error('Admin: failed to load current user', err);
-      })
+      .catch(() => { if (mounted) api.auth.redirectToLogin(); })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
   }, []);
 
-  const { theme } = CLUB_CONFIG;
-  const { colors } = theme;
+
 
   // Quick stats for dashboard - must be before conditional returns
   const { data: playerCount = 0 } = useQuery({
@@ -411,13 +407,13 @@ function PlayersTab({ queryClient, canEdit }) {
   });
 
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Players ({players.length})</CardTitle>
+        <CardTitle style={{ color: colors.textPrimary }}>Players ({players.length})</CardTitle>
         {canEdit && (
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => setEditingPlayer(null)} className="bg-[#27567D] hover:bg-[#5D82A2]">
+              <Button onClick={() => setEditingPlayer(null)} style={{ backgroundColor: '#00d4ff', color: '#000' }}>
                 <Plus className="w-4 h-4 mr-2" /> Add Player
               </Button>
             </DialogTrigger>
@@ -446,15 +442,15 @@ function PlayersTab({ queryClient, canEdit }) {
         ) : (
           <div className="space-y-3">
             {players.map((player) => (
-              <div key={player.id} className="p-4 bg-slate-50 rounded-xl">
+              <div key={player.id} className="p-4 rounded-xl" style={{ backgroundColor: colors.surfaceHover }}>
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full flex-shrink-0 bg-emerald-100 flex items-center justify-center">
-                    <span className="text-lg font-bold text-emerald-700">
+                  <div className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center" style={{ backgroundColor: '#10b98120' }}>
+                    <span className="text-lg font-bold" style={{ color: '#10b981' }}>
                       {(player.player_name || '?').charAt(0).toUpperCase()}
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold truncate">{player.player_name}</h4>
+                    <h4 className="font-semibold truncate" style={{ color: '#f8fafc' }}>{player.player_name}</h4>
                     <div className="flex flex-wrap gap-1 mt-1">
                       <Badge variant="outline" className="text-xs">{player.role}</Badge>
                       {player.is_captain && <Badge className="bg-amber-100 text-amber-800 text-xs">Captain</Badge>}
@@ -575,7 +571,7 @@ function PlayerForm({ player, onSubmit, isLoading }) {
           <Label>Vice Captain</Label>
         </div>
       </div>
-      <Button type="submit" disabled={isLoading} className="w-full bg-[#27567D] hover:bg-[#5D82A2]">
+      <Button type="submit" disabled={isLoading} className="w-full" style={{ backgroundColor: '#00d4ff', color: '#000' }}>
         {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
         {player ? 'Update Player' : 'Create Player'}
       </Button>
@@ -622,13 +618,13 @@ function NewsTab({ queryClient, canEdit }) {
   });
 
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>News Articles ({news.length})</CardTitle>
+        <CardTitle style={{ color: colors.textPrimary }}>News Articles ({news.length})</CardTitle>
         {canEdit && (
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => setEditingNews(null)} className="bg-[#27567D] hover:bg-[#5D82A2]">
+              <Button onClick={() => setEditingNews(null)} style={{ backgroundColor: '#00d4ff', color: '#000' }}>
                 <Plus className="w-4 h-4 mr-2" /> Add Article
               </Button>
             </DialogTrigger>
@@ -657,7 +653,7 @@ function NewsTab({ queryClient, canEdit }) {
         ) : (
           <div className="space-y-3">
             {news.map((article) => (
-              <div key={article.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
+              <div key={article.id} className="flex items-center justify-between p-4 rounded-xl" style={{ backgroundColor: colors.surfaceHover }}>
                 <div className="flex items-center gap-4">
                   <img 
                     src={article.image_url || 'https://images.unsplash.com/photo-1531415074968-036ba1b575da?w=100&q=80'} 
@@ -665,7 +661,7 @@ function NewsTab({ queryClient, canEdit }) {
                     className="w-16 h-16 rounded-lg object-cover"
                   />
                   <div>
-                    <h4 className="font-semibold line-clamp-1">{article.title}</h4>
+                    <h4 className="font-semibold line-clamp-1" style={{ color: '#f8fafc' }}>{article.title}</h4>
                     <div className="flex gap-2 mt-1">
                       <Badge variant="outline">{article.category}</Badge>
                       {article.is_featured && <Badge className="bg-amber-100 text-amber-800">Featured</Badge>}
@@ -739,7 +735,7 @@ function NewsForm({ article, onSubmit, isLoading }) {
         <Switch checked={formData.is_featured} onCheckedChange={(v) => setFormData({ ...formData, is_featured: v })} />
         <Label>Featured Article</Label>
       </div>
-      <Button type="submit" disabled={isLoading} className="w-full bg-[#27567D] hover:bg-[#5D82A2]">
+      <Button type="submit" disabled={isLoading} className="w-full" style={{ backgroundColor: '#00d4ff', color: '#000' }}>
         {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
         {article ? 'Update Article' : 'Create Article'}
       </Button>
@@ -776,13 +772,13 @@ function GalleryTab({ queryClient, canEdit }) {
   });
 
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Gallery ({images.length})</CardTitle>
+        <CardTitle style={{ color: colors.textPrimary }}>Gallery ({images.length})</CardTitle>
         {canEdit && (
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-[#27567D] hover:bg-[#5D82A2]">
+              <Button style={{ backgroundColor: '#00d4ff', color: '#000' }}>
                 <Plus className="w-4 h-4 mr-2" /> Add Image
               </Button>
             </DialogTrigger>
@@ -936,7 +932,7 @@ function GalleryForm({ onSubmit, isLoading }) {
         <Label>Description</Label>
         <Textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} />
       </div>
-      <Button type="submit" disabled={isLoading || uploading} className="w-full bg-[#27567D] hover:bg-[#5D82A2]">
+      <Button type="submit" disabled={isLoading || uploading} className="w-full" style={{ backgroundColor: '#00d4ff', color: '#000' }}>
         {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
         Add Image
       </Button>
@@ -953,28 +949,28 @@ function MessagesTab() {
   });
 
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardHeader>
-        <CardTitle>Contact Messages ({messages.length})</CardTitle>
+        <CardTitle style={{ color: colors.textPrimary }}>Contact Messages ({messages.length})</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
         ) : messages.length === 0 ? (
-          <div className="text-center py-8 text-slate-500">No messages yet</div>
+          <div className="text-center py-8" style={{ color: '#64748b' }}>No messages yet</div>
         ) : (
           <div className="space-y-3">
             {messages.map((msg) => (
-              <div key={msg.id} className="p-4 bg-slate-50 rounded-xl">
+              <div key={msg.id} className="p-4 rounded-xl" style={{ backgroundColor: colors.surfaceHover }}>
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <h4 className="font-semibold">{msg.name}</h4>
-                    <p className="text-sm text-slate-600">{msg.email}</p>
+                    <h4 className="font-semibold" style={{ color: '#f8fafc' }}>{msg.name}</h4>
+                    <p className="text-sm" style={{ color: '#94a3b8' }}>{msg.email}</p>
                   </div>
                   <Badge variant="outline">{msg.subject}</Badge>
                 </div>
-                <p className="text-sm text-slate-700 mt-2">{msg.message}</p>
-                <p className="text-xs text-slate-400 mt-2">{format(new Date(msg.created_date), 'MMM d, yyyy h:mm a')}</p>
+                <p className="text-sm mt-2" style={{ color: '#cbd5e1' }}>{msg.message}</p>
+                <p className="text-xs mt-2" style={{ color: '#64748b' }}>{format(new Date(msg.created_date), 'MMM d, yyyy h:mm a')}</p>
               </div>
             ))}
           </div>
@@ -987,13 +983,13 @@ function MessagesTab() {
 // Teams Tab - Links to Teams management page
 function TeamsTab() {
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardContent className="p-8 text-center">
-        <Users className="w-12 h-12 text-[#27567D] mx-auto mb-4" />
-        <h2 className="text-xl font-semibold mb-2">Team Management</h2>
-        <p className="text-slate-500 mb-6">Manage teams, players, and squad details</p>
+        <Users className="w-12 h-12 mx-auto mb-4" style={{ color: '#00d4ff' }} />
+        <h2 className="text-xl font-semibold mb-2" style={{ color: colors.textPrimary }}>Team Management</h2>
+        <p className="mb-6" style={{ color: '#64748b' }}>Manage teams, players, and squad details</p>
         <Link to={createPageUrl('Teams')}>
-          <Button className="bg-[#27567D] hover:bg-[#5D82A2]">
+          <Button style={{ backgroundColor: '#00d4ff', color: '#000' }}>
             Open Team Manager
           </Button>
         </Link>
@@ -1038,9 +1034,9 @@ function StatsTab({ queryClient }) {
   };
 
   return (
-    <Card>
+    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
       <CardHeader>
-        <CardTitle>Club Statistics</CardTitle>
+        <CardTitle style={{ color: colors.textPrimary }}>Club Statistics</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -1082,7 +1078,7 @@ function StatsTab({ queryClient }) {
               <Input type="number" value={formData.trophies_won} onChange={(e) => setFormData({ ...formData, trophies_won: parseInt(e.target.value) || 0 })} />
             </div>
           </div>
-          <Button type="submit" disabled={mutation.isPending} className="bg-[#27567D] hover:bg-[#5D82A2]">
+          <Button type="submit" disabled={mutation.isPending} style={{ backgroundColor: '#00d4ff', color: '#000' }}>
             {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
             Save Statistics
           </Button>

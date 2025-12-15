@@ -9,7 +9,7 @@ import { Trophy, ArrowLeft, Calendar, Users, BarChart3, Settings, Loader2, Clock
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { format } from 'date-fns';
-import { CLUB_CONFIG } from '../components/ClubConfig';
+import { getFinanceTheme } from '../components/ClubConfig';
 
 import TournamentTeams from '../components/tournament/TournamentTeams';
 import TournamentFixtures from '../components/tournament/TournamentFixtures';
@@ -18,8 +18,7 @@ import TournamentBracket from '../components/tournament/TournamentBracket';
 import TournamentStats from '../components/tournament/TournamentStats';
 import TournamentSettings from '../components/tournament/TournamentSettings';
 
-const { theme } = CLUB_CONFIG;
-const { colors } = theme;
+const colors = getFinanceTheme();
 
 const statusConfig = {
   draft: { color: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400', label: 'Draft' },
@@ -113,9 +112,9 @@ export default function TournamentView() {
   const isAdmin = user?.role === 'admin';
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: colors.background }}>
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
       {/* Hero Section */}
-      <section className="relative pt-24 sm:pt-32 lg:pt-8 pb-12 sm:pb-16 lg:pb-10" style={{ backgroundColor: colors.secondary }}>
+      <section className="relative pt-8 pb-10" style={{ backgroundColor: colors.surface }}>
         {tournament.banner_url && (
           <div className="absolute inset-0">
             <img src={tournament.banner_url} alt="" className="w-full h-full object-cover opacity-20" />

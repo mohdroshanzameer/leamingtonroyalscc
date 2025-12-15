@@ -9,10 +9,10 @@ import { Trophy, Plus, Calendar, Users, Search, ChevronRight, Clock, CheckCircle
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
 import { format } from 'date-fns';
-import { CLUB_CONFIG } from '../components/ClubConfig';
+import { CLUB_CONFIG, getFinanceTheme } from '../components/ClubConfig';
 
-const { theme, pages } = CLUB_CONFIG;
-const { colors } = theme;
+const colors = getFinanceTheme();
+const { pages } = CLUB_CONFIG;
 
 const statusConfig = {
   draft: { color: 'bg-orange-100 text-orange-700 border border-orange-200', dot: 'bg-orange-500', label: 'Draft' },
@@ -113,9 +113,9 @@ export default function Tournaments() {
   );
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: colors.background }}>
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
       {/* Hero Section */}
-      <section className="relative pt-28 sm:pt-36 lg:pt-12 pb-12 sm:pb-20 lg:pb-12" style={{ backgroundColor: colors.secondary }}>
+      <section className="relative pt-12 pb-12" style={{ backgroundColor: colors.surface }}>
         <div className="absolute inset-0">
           <img
             src={pages.fixtures.backgroundImage}
@@ -149,7 +149,7 @@ export default function Tournaments() {
       </section>
 
       {/* Tournaments */}
-      <section className="py-8 sm:py-16">
+      <section className="py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Search */}
           <div className="mb-6 sm:mb-8 max-w-md">

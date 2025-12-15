@@ -8,8 +8,9 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || "password",
 });
 
-let DB_TABLES = new Set();
-let DB_COLUMNS = new Map();
+// Keep same object references forever
+const DB_TABLES = new Set();
+const DB_COLUMNS = new Map();
 
 async function loadDbMetadata() {
   const tRes = await pool.query(`
@@ -17,14 +18,17 @@ async function loadDbMetadata() {
     FROM pg_tables
     WHERE schemaname = 'public'
   `);
-  DB_TABLES = new Set(tRes.rows.map((r) => r.tablename));
+
+  DB_TABLES.clear();
+  for (const r of tRes.rows) DB_TABLES.add(r.tablename);
 
   const cRes = await pool.query(`
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
   `);
-  DB_COLUMNS = new Map();
+
+  DB_COLUMNS.clear();
   for (const row of cRes.rows) {
     if (!DB_COLUMNS.has(row.table_name)) DB_COLUMNS.set(row.table_name, new Set());
     DB_COLUMNS.get(row.table_name).add(row.column_name);

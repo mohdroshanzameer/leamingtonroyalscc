@@ -9,11 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Trophy, ArrowLeft, Save, Calendar, Users, Zap, Shield, Swords, Layers, Check, ChevronRight, Award, Phone, Globe, DollarSign } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { createPageUrl } from '../utils';
+import { createPageUrl } from '../components/utils';
 import { toast } from 'sonner';
-import { CLUB_CONFIG } from '../components/ClubConfig';
+import { getFinanceTheme } from '../components/ClubConfig';
 
-const { colors } = CLUB_CONFIG.theme;
+const colors = getFinanceTheme();
 
 export default function TournamentCreate() {
   const [step, setStep] = useState(1);
@@ -188,7 +188,7 @@ export default function TournamentCreate() {
   ];
 
   return (
-    <div className="min-h-screen pt-16" style={{ backgroundColor: colors.background }}>
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
       {/* Header */}
       <div className="border-b" style={{ borderColor: colors.border, backgroundColor: colors.surface }}>
         <div className="max-w-4xl mx-auto px-4 py-4">

@@ -10,13 +10,16 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Trophy, Calendar, Plus, Pencil, Trash2, ChevronRight, ArrowLeft, Loader2 } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { Trophy, Calendar, Plus, Pencil, Trash2, ChevronRight, ArrowLeft, Loader2, CalendarIcon } from 'lucide-react';
+import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
-import { createPageUrl } from '../utils';
+import { createPageUrl } from '../components/utils';
 import { toast } from 'sonner';
-import { CLUB_CONFIG } from '../components/ClubConfig';
+import { getFinanceTheme } from '@/components/ClubConfig';
 
-const { colors } = CLUB_CONFIG.theme;
+const colors = getFinanceTheme();
 
 export default function CompetitionManager() {
   const queryClient = useQueryClient();
@@ -145,18 +148,18 @@ export default function CompetitionManager() {
   };
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: colors.background }}>
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
       {/* Header */}
-      <div className="pt-24 sm:pt-28 pb-8 px-4" style={{ backgroundColor: colors.primary }}>
+      <div className="pt-8 pb-8 px-4" style={{ backgroundColor: colors.surface, borderBottom: `1px solid ${colors.border}` }}>
         <div className="max-w-5xl mx-auto">
-          <Link to={createPageUrl('Admin')} className="inline-flex items-center text-white/80 hover:text-white mb-4 text-sm">
+          <Link to={createPageUrl('Admin')} className="inline-flex items-center mb-4 text-sm" style={{ color: colors.textSecondary }}>
             <ArrowLeft className="w-4 h-4 mr-2" /> Back to Admin
           </Link>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-3" style={{ color: colors.textPrimary }}>
             <Trophy className="w-8 h-8" />
             Competition Manager
           </h1>
-          <p className="text-white/70 mt-1">Manage seasons and competitions</p>
+          <p className="mt-1" style={{ color: colors.textSecondary }}>Manage seasons and competitions</p>
         </div>
       </div>
 
@@ -232,19 +235,19 @@ export default function CompetitionManager() {
 
                 {/* Standalone competitions (no parent, no children) */}
                 {competitions.filter(c => !c.parent_id && getSubCompetitions(c.id).length === 0 && !parentCompetitions.some(p => p.id === c.id)).length > 0 && (
-                  <Card>
-                    <CardHeader><CardTitle className="text-lg">Standalone Competitions</CardTitle></CardHeader>
+                  <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                    <CardHeader><CardTitle className="text-lg" style={{ color: colors.textPrimary }}>Standalone Competitions</CardTitle></CardHeader>
                     <CardContent>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {competitions.filter(c => !c.parent_id && getSubCompetitions(c.id).length === 0).map(comp => (
-                          <div key={comp.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-50 group">
-                            <span className="text-sm font-medium">{comp.name}</span>
+                          <div key={comp.id} className="flex items-center justify-between p-2 rounded-lg group" style={{ backgroundColor: colors.surfaceHover }}>
+                            <span className="text-sm font-medium" style={{ color: colors.textPrimary }}>{comp.name}</span>
                             <div className="opacity-0 group-hover:opacity-100 flex gap-1">
-                              <button onClick={() => openCompEdit(comp)} className="p-1 hover:bg-slate-200 rounded">
+                              <button onClick={() => openCompEdit(comp)} className="p-1 rounded" style={{ color: colors.textSecondary }}>
                                 <Pencil className="w-3 h-3" />
                               </button>
-                              <button onClick={() => deleteCompMutation.mutate(comp.id)} className="p-1 hover:bg-red-100 rounded">
-                                <Trash2 className="w-3 h-3 text-red-500" />
+                              <button onClick={() => deleteCompMutation.mutate(comp.id)} className="p-1 rounded">
+                                <Trash2 className="w-3 h-3 text-red-400" />
                               </button>
                             </div>
                           </div>
@@ -285,7 +288,7 @@ export default function CompetitionManager() {
                           </div>
                           {season.start_date && (
                             <p className="text-sm" style={{ color: colors.textMuted }}>
-                              {season.start_date} → {season.end_date || 'Ongoing'}
+                              {format(new Date(season.start_date), 'dd MMM yyyy')} → {season.end_date ? format(new Date(season.end_date), 'dd MMM yyyy') : 'Ongoing'}
                             </p>
                           )}
                         </div>
@@ -309,29 +312,59 @@ export default function CompetitionManager() {
 
       {/* Season Dialog */}
       <Dialog open={seasonDialog} onOpenChange={setSeasonDialog}>
-        <DialogContent>
+        <DialogContent style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
           <DialogHeader>
-            <DialogTitle>{editingSeason ? 'Edit Season' : 'Add Season'}</DialogTitle>
+            <DialogTitle style={{ color: colors.textPrimary }}>{editingSeason ? 'Edit Season' : 'Add Season'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div>
-              <Label>Season Name *</Label>
-              <Input value={seasonForm.name} onChange={(e) => setSeasonForm({ ...seasonForm, name: e.target.value })} placeholder="e.g., 2025" className="mt-1" />
+              <Label style={{ color: colors.textSecondary }}>Season Name *</Label>
+              <Input value={seasonForm.name} onChange={(e) => setSeasonForm({ ...seasonForm, name: e.target.value })} placeholder="e.g., 2025" className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Start Date</Label>
-                <Input type="date" value={seasonForm.start_date} onChange={(e) => setSeasonForm({ ...seasonForm, start_date: e.target.value })} className="mt-1" />
+                <Label style={{ color: colors.textSecondary }}>Start Date</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-full mt-1 justify-start text-left font-normal" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {seasonForm.start_date ? format(new Date(seasonForm.start_date), 'dd MMM yyyy') : 'Pick a date'}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+                    <CalendarComponent 
+                      mode="single" 
+                      selected={seasonForm.start_date ? new Date(seasonForm.start_date) : undefined}
+                      onSelect={(date) => setSeasonForm({ ...seasonForm, start_date: date ? format(date, 'yyyy-MM-dd') : '' })}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
               <div>
-                <Label>End Date</Label>
-                <Input type="date" value={seasonForm.end_date} onChange={(e) => setSeasonForm({ ...seasonForm, end_date: e.target.value })} className="mt-1" />
+                <Label style={{ color: colors.textSecondary }}>End Date</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-full mt-1 justify-start text-left font-normal" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {seasonForm.end_date ? format(new Date(seasonForm.end_date), 'dd MMM yyyy') : 'Pick a date'}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+                    <CalendarComponent 
+                      mode="single" 
+                      selected={seasonForm.end_date ? new Date(seasonForm.end_date) : undefined}
+                      onSelect={(date) => setSeasonForm({ ...seasonForm, end_date: date ? format(date, 'yyyy-MM-dd') : '' })}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
             <div>
-              <Label>Status</Label>
+              <Label style={{ color: colors.textSecondary }}>Status</Label>
               <Select value={seasonForm.status} onValueChange={(v) => setSeasonForm({ ...seasonForm, status: v })}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Upcoming">Upcoming</SelectItem>
                   <SelectItem value="Active">Active</SelectItem>
@@ -340,13 +373,13 @@ export default function CompetitionManager() {
               </Select>
             </div>
             <div className="flex items-center justify-between">
-              <Label>Current Season</Label>
+              <Label className="font-medium" style={{ color: '#ffffff' }}>Current Season</Label>
               <Switch checked={seasonForm.is_current} onCheckedChange={(v) => setSeasonForm({ ...seasonForm, is_current: v })} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSeasonDialog(false)}>Cancel</Button>
-            <Button onClick={handleSeasonSubmit} disabled={seasonMutation.isPending} style={{ backgroundColor: colors.primary }} className="text-white">
+            <Button variant="outline" onClick={() => setSeasonDialog(false)} style={{ borderColor: colors.border, color: colors.textSecondary }}>Cancel</Button>
+            <Button onClick={handleSeasonSubmit} disabled={seasonMutation.isPending} style={{ backgroundColor: colors.accent, color: '#000' }} className="font-semibold">
               {seasonMutation.isPending ? 'Saving...' : 'Save'}
             </Button>
           </DialogFooter>
@@ -355,23 +388,23 @@ export default function CompetitionManager() {
 
       {/* Competition Dialog */}
       <Dialog open={compDialog} onOpenChange={setCompDialog}>
-        <DialogContent>
+        <DialogContent style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
           <DialogHeader>
-            <DialogTitle>{editingComp ? 'Edit Competition' : 'Add Competition'}</DialogTitle>
+            <DialogTitle style={{ color: colors.textPrimary }}>{editingComp ? 'Edit Competition' : 'Add Competition'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div>
-              <Label>Competition Name *</Label>
-              <Input value={compForm.name} onChange={(e) => setCompForm({ ...compForm, name: e.target.value })} placeholder="e.g., Division 1" className="mt-1" />
+              <Label style={{ color: colors.textSecondary }}>Competition Name *</Label>
+              <Input value={compForm.name} onChange={(e) => setCompForm({ ...compForm, name: e.target.value })} placeholder="e.g., Division 1" className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} />
             </div>
             <div>
-              <Label>Short Name *</Label>
-              <Input value={compForm.short_name} onChange={(e) => setCompForm({ ...compForm, short_name: e.target.value })} placeholder="e.g., Div 1" className="mt-1" />
+              <Label style={{ color: colors.textSecondary }}>Short Name *</Label>
+              <Input value={compForm.short_name} onChange={(e) => setCompForm({ ...compForm, short_name: e.target.value })} placeholder="e.g., Div 1" className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} />
             </div>
             <div>
-              <Label>Parent Competition (optional)</Label>
+              <Label style={{ color: colors.textSecondary }}>Parent Competition (optional)</Label>
               <Select value={compForm.parent_id || 'none'} onValueChange={(v) => setCompForm({ ...compForm, parent_id: v === 'none' ? '' : v })}>
-                <SelectTrigger className="mt-1"><SelectValue placeholder="None (Parent Competition)" /></SelectTrigger>
+                <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}><SelectValue placeholder="None (Parent Competition)" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None (Parent Competition)</SelectItem>
                   {parentCompetitions.filter(p => p.id !== editingComp?.id).map(p => (
@@ -382,9 +415,9 @@ export default function CompetitionManager() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Format</Label>
+                <Label style={{ color: colors.textSecondary }}>Format</Label>
                 <Select value={compForm.format} onValueChange={(v) => setCompForm({ ...compForm, format: v })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="T20">T20</SelectItem>
                     <SelectItem value="T10">T10</SelectItem>
@@ -395,9 +428,9 @@ export default function CompetitionManager() {
                 </Select>
               </div>
               <div>
-                <Label>Status</Label>
+                <Label style={{ color: colors.textSecondary }}>Status</Label>
                 <Select value={compForm.status} onValueChange={(v) => setCompForm({ ...compForm, status: v })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Active">Active</SelectItem>
                     <SelectItem value="Completed">Completed</SelectItem>
@@ -408,8 +441,8 @@ export default function CompetitionManager() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCompDialog(false)}>Cancel</Button>
-            <Button onClick={handleCompSubmit} disabled={compMutation.isPending} style={{ backgroundColor: colors.primary }} className="text-white">
+            <Button variant="outline" onClick={() => setCompDialog(false)} style={{ borderColor: colors.border, color: colors.textSecondary }}>Cancel</Button>
+            <Button onClick={handleCompSubmit} disabled={compMutation.isPending} style={{ backgroundColor: colors.accent, color: '#000' }} className="font-semibold">
               {compMutation.isPending ? 'Saving...' : 'Save'}
             </Button>
           </DialogFooter>
