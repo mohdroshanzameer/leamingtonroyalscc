@@ -374,7 +374,13 @@ export default function CompetitionManager() {
             </div>
             <div className="flex items-center justify-between">
               <Label className="font-medium" style={{ color: '#ffffff' }}>Current Season</Label>
-              <Switch checked={seasonForm.is_current} onCheckedChange={(v) => setSeasonForm({ ...seasonForm, is_current: v })} />
+              <Switch 
+                checked={seasonForm.is_current} 
+                onCheckedChange={(v) => setSeasonForm({ ...seasonForm, is_current: v })}
+                style={{
+                  backgroundColor: seasonForm.is_current ? colors.accent : '#334155',
+                }}
+              />
             </div>
           </div>
           <DialogFooter>
