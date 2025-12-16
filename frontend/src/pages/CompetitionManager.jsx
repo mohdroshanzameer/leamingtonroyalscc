@@ -24,16 +24,23 @@ const colors = getFinanceTheme();
 export default function CompetitionManager() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('seasons');
+  const [user, setUser] = useState(null);
   
   // Season state
   const [seasonDialog, setSeasonDialog] = useState(false);
   const [editingSeason, setEditingSeason] = useState(null);
   const [seasonForm, setSeasonForm] = useState({ name: '', start_date: '', end_date: '', status: 'Upcoming', is_current: false });
 
+  // Fetch current user
+  React.useEffect(() => {
+    api.auth.me().then(setUser).catch(() => {});
+  }, []);
+
   // Competition state
   const [compDialog, setCompDialog] = useState(false);
   const [editingComp, setEditingComp] = useState(null);
-  const [compForm, setCompForm] = useState({ name: '', short_name: '', parent_id: '', format: 'T20', status: 'Active' });
+  const [compType, setCompType] = useState('league'); // 'league' or 'division'
+  const [compForm, setCompForm] = useState({ name: '', short_name: '', parent_id: '', format: 'T20', status: 'Active', match_fee: 0 });
 
   // Fetch data
   const { data: seasons = [], isLoading: loadingSeasons } = useQuery({
@@ -48,11 +55,20 @@ export default function CompetitionManager() {
 
   // Mutations
   const seasonMutation = useMutation({
-    mutationFn: (data) => editingSeason 
-      ? api.entities.Season.update(editingSeason.id, data)
-      : api.entities.Season.create(data),
-    onSuccess: () => {
+    mutationFn: (data) => {
+      const payload = editingSeason ? data : { ...data, created_by: user?.email };
+      return editingSeason 
+        ? api.entities.Season.update(editingSeason.id, payload)
+        : api.entities.Season.create(payload);
+    },
+    onSuccess: async (season) => {
       queryClient.invalidateQueries({ queryKey: ['seasons'] });
+      
+      // If this is the current season, save to user preferences
+      if (season.is_current && user) {
+        await api.auth.updateMe({ default_season_id: season.id }).catch(() => {});
+      }
+      
       setSeasonDialog(false);
       setEditingSeason(null);
       resetSeasonForm();
@@ -69,9 +85,17 @@ export default function CompetitionManager() {
   });
 
   const compMutation = useMutation({
-    mutationFn: (data) => editingComp
-      ? api.entities.Competition.update(editingComp.id, data)
-      : api.entities.Competition.create(data),
+    mutationFn: (data) => {
+      // Ensure match_fee is a number
+      const payload = { 
+        ...data, 
+        match_fee: parseFloat(data.match_fee) || 0,
+        ...(editingComp ? {} : { created_by: user?.email })
+      };
+      return editingComp
+        ? api.entities.Competition.update(editingComp.id, payload)
+        : api.entities.Competition.create(payload);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['competitions'] });
       setCompDialog(false);
@@ -90,7 +114,7 @@ export default function CompetitionManager() {
   });
 
   const resetSeasonForm = () => setSeasonForm({ name: '', start_date: '', end_date: '', status: 'Upcoming', is_current: false });
-  const resetCompForm = () => setCompForm({ name: '', short_name: '', parent_id: '', format: 'T20', status: 'Active' });
+  const resetCompForm = () => setCompForm({ name: '', short_name: '', parent_id: '', format: 'T20', status: 'Active', match_fee: 0 });
 
   const openSeasonEdit = (season) => {
     setEditingSeason(season);
@@ -106,12 +130,14 @@ export default function CompetitionManager() {
 
   const openCompEdit = (comp) => {
     setEditingComp(comp);
+    setCompType(comp.parent_id ? 'division' : 'league');
     setCompForm({
       name: comp.name || '',
       short_name: comp.short_name || '',
       parent_id: comp.parent_id || '',
       format: comp.format || 'T20',
       status: comp.status || 'Active',
+      match_fee: comp.match_fee || 0,
     });
     setCompDialog(true);
   };
@@ -129,12 +155,19 @@ export default function CompetitionManager() {
       toast.error('Name and short name are required');
       return;
     }
+    if (compType === 'division' && !compForm.parent_id) {
+      toast.error('Please select a parent league');
+      return;
+    }
     const parent = parentCompetitions.find(p => p.id === compForm.parent_id);
-    compMutation.mutate({
+    const payload = {
       ...compForm,
+      match_fee: parseFloat(compForm.match_fee) || 0,
       parent_name: parent?.short_name || parent?.name || null,
-      parent_id: compForm.parent_id || null,
-    });
+      parent_id: compType === 'league' ? null : compForm.parent_id,
+    };
+    console.log('Submitting competition:', payload);
+    compMutation.mutate(payload);
   };
 
   // Group competitions
@@ -178,9 +211,31 @@ export default function CompetitionManager() {
           <TabsContent value="competitions">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold" style={{ color: colors.textPrimary }}>Competitions & Divisions</h2>
-              <Button onClick={() => { resetCompForm(); setEditingComp(null); setCompDialog(true); }} style={{ backgroundColor: colors.accent, color: '#1a1a2e' }}>
-                <Plus className="w-4 h-4 mr-2" /> Add Competition
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => { 
+                    resetCompForm(); 
+                    setEditingComp(null); 
+                    setCompType('league'); 
+                    setCompDialog(true); 
+                  }} 
+                  style={{ backgroundColor: colors.accent, color: '#1a1a2e' }}
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Add League
+                </Button>
+                <Button 
+                  onClick={() => { 
+                    resetCompForm(); 
+                    setEditingComp(null); 
+                    setCompType('division'); 
+                    setCompDialog(true); 
+                  }} 
+                  variant="outline"
+                  style={{ borderColor: colors.accent, color: colors.accent }}
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Add Sub-Competition
+                </Button>
+              </div>
             </div>
 
             {loadingComps ? (
@@ -396,29 +451,67 @@ export default function CompetitionManager() {
       <Dialog open={compDialog} onOpenChange={setCompDialog}>
         <DialogContent style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
           <DialogHeader>
-            <DialogTitle style={{ color: colors.textPrimary }}>{editingComp ? 'Edit Competition' : 'Add Competition'}</DialogTitle>
+            <DialogTitle style={{ color: colors.textPrimary }}>
+              {editingComp 
+                ? `Edit ${compType === 'league' ? 'League' : 'Sub-Competition'}` 
+                : `Add ${compType === 'league' ? 'League' : 'Sub-Competition'}`}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {compType === 'division' && (
+              <div>
+                <Label style={{ color: colors.textSecondary }}>Parent League *</Label>
+                <Select value={compForm.parent_id || 'select'} onValueChange={(v) => setCompForm({ ...compForm, parent_id: v === 'select' ? '' : v })}>
+                  <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                    <SelectValue placeholder="Select parent league" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="select" disabled>Select parent league</SelectItem>
+                    {parentCompetitions.filter(p => p.id !== editingComp?.id).map(p => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
-              <Label style={{ color: colors.textSecondary }}>Competition Name *</Label>
-              <Input value={compForm.name} onChange={(e) => setCompForm({ ...compForm, name: e.target.value })} placeholder="e.g., Division 1" className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} />
+              <Label style={{ color: colors.textSecondary }}>
+                {compType === 'league' ? 'League Name' : 'Sub-Competition Name'} *
+              </Label>
+              <Input 
+                value={compForm.name} 
+                onChange={(e) => setCompForm({ ...compForm, name: e.target.value })} 
+                placeholder={compType === 'league' ? 'e.g., Warwickshire Cricket League' : 'e.g., Division 9'} 
+                className="mt-1" 
+                style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} 
+              />
             </div>
             <div>
               <Label style={{ color: colors.textSecondary }}>Short Name *</Label>
-              <Input value={compForm.short_name} onChange={(e) => setCompForm({ ...compForm, short_name: e.target.value })} placeholder="e.g., Div 1" className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} />
+              <Input 
+                value={compForm.short_name} 
+                onChange={(e) => setCompForm({ ...compForm, short_name: e.target.value })} 
+                placeholder={compType === 'league' ? 'e.g., WCL' : 'e.g., Div 9'} 
+                className="mt-1" 
+                style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} 
+              />
             </div>
-            <div>
-              <Label style={{ color: colors.textSecondary }}>Parent Competition (optional)</Label>
-              <Select value={compForm.parent_id || 'none'} onValueChange={(v) => setCompForm({ ...compForm, parent_id: v === 'none' ? '' : v })}>
-                <SelectTrigger className="mt-1" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}><SelectValue placeholder="None (Parent Competition)" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None (Parent Competition)</SelectItem>
-                  {parentCompetitions.filter(p => p.id !== editingComp?.id).map(p => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {compType === 'division' && (
+              <div>
+                <Label style={{ color: colors.textSecondary }}>Match Fee (£)</Label>
+                <Input 
+                  type="number"
+                  value={compForm.match_fee || 0} 
+                  onChange={(e) => setCompForm({ ...compForm, match_fee: parseFloat(e.target.value) || 0 })} 
+                  placeholder="e.g., 10" 
+                  min="0"
+                  step="0.01"
+                  className="mt-1" 
+                  style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }} 
+                />
+                <p className="text-xs mt-1" style={{ color: colors.textMuted }}>Match fee for this sub-competition (£0 = no fee)</p>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label style={{ color: colors.textSecondary }}>Format</Label>

@@ -12,9 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Edit, Trash2, Loader2, Save, Users, UserCheck, UserX, Clock } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { CLUB_CONFIG, getFinanceTheme } from '@/components/ClubConfig';
+import { getFinanceTheme } from '@/components/ClubConfig';
 
-const MEMBERSHIP_FEES = CLUB_CONFIG.membershipFees;
 const colors = getFinanceTheme();
 
 export default function MembershipManager() {
@@ -26,6 +25,14 @@ export default function MembershipManager() {
     queryKey: ['memberships'],
     queryFn: () => api.entities.Membership.list('-created_date', 200),
     initialData: [],
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['payment-settings'],
+    queryFn: async () => {
+      const list = await api.entities.PaymentSettings.list();
+      return list[0] || {};
+    },
   });
 
   const createMutation = useMutation({
@@ -140,6 +147,7 @@ export default function MembershipManager() {
                   updateMutation.mutate({ id: editingMember.id, data });
                 }}
                 isLoading={updateMutation.isPending}
+                settings={settings}
               />
             </DialogContent>
           </Dialog>
@@ -205,7 +213,17 @@ export default function MembershipManager() {
   );
 }
 
-function MembershipForm({ membership, onSubmit, isLoading }) {
+function MembershipForm({ membership, onSubmit, isLoading, settings }) {
+  const membershipFees = {
+    Junior: settings?.junior_membership_fee || 25,
+    Adult: settings?.adult_membership_fee || 75,
+    Family: settings?.family_membership_fee || 150,
+    Senior: settings?.senior_membership_fee || 50,
+    Life: 500,
+    Corporate: 1000,
+    Social: 0,
+  };
+
   const [formData, setFormData] = useState(membership || {
     member_name: '',
     email: '',
@@ -214,7 +232,7 @@ function MembershipForm({ membership, onSubmit, isLoading }) {
     status: 'Pending',
     start_date: new Date().toISOString().split('T')[0],
     expiry_date: '',
-    fee_amount: MEMBERSHIP_FEES['Adult'],
+    fee_amount: membershipFees['Adult'],
     payment_status: 'Unpaid',
     notes: ''
   });
@@ -223,7 +241,7 @@ function MembershipForm({ membership, onSubmit, isLoading }) {
     setFormData({
       ...formData,
       membership_type: type,
-      fee_amount: MEMBERSHIP_FEES[type]
+      fee_amount: membershipFees[type]
     });
   };
 
@@ -252,8 +270,8 @@ function MembershipForm({ membership, onSubmit, isLoading }) {
           <Select value={formData.membership_type} onValueChange={handleTypeChange}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              {Object.keys(MEMBERSHIP_FEES).map(type => (
-                <SelectItem key={type} value={type}>{type} (£{MEMBERSHIP_FEES[type]})</SelectItem>
+              {Object.keys(membershipFees).map(type => (
+                <SelectItem key={type} value={type}>{type} (£{membershipFees[type]})</SelectItem>
               ))}
             </SelectContent>
           </Select>

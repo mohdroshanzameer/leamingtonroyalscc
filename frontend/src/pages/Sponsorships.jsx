@@ -19,17 +19,21 @@ import { toast } from 'sonner';
 import { format, parseISO, isAfter, isBefore, addDays } from 'date-fns';
 import { CLUB_CONFIG, getFinanceTheme } from '@/components/ClubConfig';
 import { canViewFinance, canManageFinance } from '@/components/RoleAccess';
+import ImageSelector from '../components/admin/ImageSelector';
+import { formatCurrency } from '../utils/formatters';
 
 const colors = getFinanceTheme();
 
-const LEVEL_CONFIG = {
-  Platinum: { color: '#e5e4e2', bg: '#e5e4e215', amount: 5000 },
-  Gold: { color: '#ffd700', bg: '#ffd70015', amount: 2500 },
-  Silver: { color: '#c0c0c0', bg: '#c0c0c015', amount: 1000 },
-  Bronze: { color: '#cd7f32', bg: '#cd7f3215', amount: 500 },
-  'Match Day': { color: colors.info, bg: colors.infoLight, amount: 250 },
-  Kit: { color: colors.chart3, bg: `${colors.chart3}15`, amount: 1500 },
-  Other: { color: colors.textSecondary, bg: colors.surfaceHover, amount: 0 }
+const getLevelConfig = (typeName, sponsorTypes) => {
+  const type = sponsorTypes.find(t => t.name === typeName);
+  if (type) {
+    return {
+      color: type.color,
+      bg: `${type.color}15`,
+      amount: type.suggested_amount
+    };
+  }
+  return { color: colors.textSecondary, bg: colors.surfaceHover, amount: 0 };
 };
 
 export default function Sponsorships() {
@@ -37,17 +41,16 @@ export default function Sponsorships() {
   const [loading, setLoading] = useState(true);
   const [showSponsorDialog, setShowSponsorDialog] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [showTypesDialog, setShowTypesDialog] = useState(false);
   const [editingSponsor, setEditingSponsor] = useState(null);
   const [selectedSponsor, setSelectedSponsor] = useState(null);
+  const [editingPayment, setEditingPayment] = useState(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
     api.auth.me()
       .then(u => setUser(u))
-      .catch((err) => {
-        if (err?.status === 401 || err?.status === 403) return api.auth.redirectToLogin();
-        console.error('Sponsorships: failed to load current user', err);
-      })
+      .catch(() => api.auth.redirectToLogin())
       .finally(() => setLoading(false));
   }, []);
 
@@ -59,6 +62,26 @@ export default function Sponsorships() {
   const { data: payments = [] } = useQuery({
     queryKey: ['sponsorPayments'],
     queryFn: () => api.entities.SponsorPayment.list('-payment_date'),
+  });
+
+  const { data: seasons = [] } = useQuery({
+    queryKey: ['seasons'],
+    queryFn: () => api.entities.Season.list('-created_date'),
+  });
+
+  const { data: competitions = [] } = useQuery({
+    queryKey: ['competitions'],
+    queryFn: () => api.entities.Competition.list('name'),
+  });
+
+  const { data: teams = [] } = useQuery({
+    queryKey: ['teams'],
+    queryFn: () => api.entities.Team.list('name'),
+  });
+
+  const { data: sponsorTypes = [] } = useQuery({
+    queryKey: ['sponsorTypes'],
+    queryFn: () => api.entities.SponsorType.filter({ is_active: true }, 'display_order'),
   });
 
   const createSponsorMutation = useMutation({
@@ -91,23 +114,25 @@ export default function Sponsorships() {
 
   const createPaymentMutation = useMutation({
     mutationFn: async (data) => {
-      await api.entities.SponsorPayment.create(data);
-      // Update sponsor amount_paid
+      // Clean data: remove empty strings for UUID fields
+      const cleanData = { ...data };
+      if (cleanData.season_id === '') delete cleanData.season_id;
+      if (cleanData.competition_id === '') delete cleanData.competition_id;
+      if (cleanData.team_id === '') delete cleanData.team_id;
+
+      const payment = await api.entities.SponsorPayment.create(cleanData);
+
+      // Create Transaction for Finance page ledger with reference to payment
       const sponsor = sponsors.find(s => s.id === data.sponsor_id);
       if (sponsor) {
-        await api.entities.Sponsor.update(sponsor.id, {
-          amount_paid: (sponsor.amount_paid || 0) + data.amount
-        });
-        
-        // Create a Transaction record for club income
         await api.entities.Transaction.create({
           type: 'Income',
           category_name: 'Sponsorship',
           amount: data.amount,
-          description: `Sponsorship payment - ${sponsor.company_name} (${sponsor.sponsorship_level})`,
+          description: `Sponsorship - ${sponsor.name} (${data.sponsor_type})`,
           date: data.payment_date,
-          reference: data.reference,
-          received_from: sponsor.company_name,
+          reference: data.reference || `SP-${payment.id}`, // Link to SponsorPayment
+          received_from: sponsor.name,
           payment_method: data.payment_method,
           status: 'Completed',
           notes: data.notes
@@ -124,18 +149,83 @@ export default function Sponsorships() {
     },
   });
 
+  const updatePaymentMutation = useMutation({
+    mutationFn: async ({ id, data }) => {
+      // Update SponsorPayment
+      await api.entities.SponsorPayment.update(id, data);
+
+      // Update corresponding Transaction
+      const transactions = await api.entities.Transaction.filter({ 
+        category_name: 'Sponsorship' 
+      });
+      const matchingTx = transactions.find(tx => tx.reference?.includes(id));
+      if (matchingTx) {
+        const sponsor = sponsors.find(s => s.id === data.sponsor_id);
+        await api.entities.Transaction.update(matchingTx.id, {
+          amount: data.amount,
+          description: `Sponsorship - ${sponsor?.name || data.sponsor_name} (${data.sponsor_type})`,
+          date: data.payment_date,
+          reference: data.reference || `SP-${id}`,
+          received_from: sponsor?.name || data.sponsor_name,
+          payment_method: data.payment_method,
+          notes: data.notes
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sponsorPayments'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      setShowPaymentDialog(false);
+      setEditingPayment(null);
+      toast.success('Payment updated');
+    },
+  });
+
+  const deletePaymentMutation = useMutation({
+    mutationFn: async (paymentId) => {
+      // Delete SponsorPayment
+      await api.entities.SponsorPayment.delete(paymentId);
+
+      // Soft delete corresponding Transaction (matched by reference containing payment ID)
+      const transactions = await api.entities.Transaction.filter({ 
+        category_name: 'Sponsorship',
+        is_deleted: false
+      });
+      const matchingTx = transactions.find(tx => tx.reference?.includes(paymentId));
+      if (matchingTx) {
+        const currentUser = await api.auth.me().catch(() => null);
+        await api.entities.Transaction.update(matchingTx.id, {
+          is_deleted: true,
+          deleted_at: new Date().toISOString(),
+          deleted_by: currentUser?.email || 'unknown'
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sponsorPayments'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      toast.success('Payment deleted');
+    },
+  });
+
   // Stats
   const stats = useMemo(() => {
-    const active = sponsors.filter(s => s.status === 'Active');
-    const totalValue = active.reduce((sum, s) => sum + (s.amount || 0), 0);
-    const totalPaid = active.reduce((sum, s) => sum + (s.amount_paid || 0), 0);
-    const outstanding = totalValue - totalPaid;
-    const expiringSoon = active.filter(s => 
-      s.end_date && isBefore(parseISO(s.end_date), addDays(new Date(), 30))
-    ).length;
-
-    return { active: active.length, totalValue, totalPaid, outstanding, expiringSoon };
-  }, [sponsors]);
+    const activeSponsorIds = new Set(payments.map(p => p.sponsor_id));
+    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const currentSeason = seasons.find(s => s.status === 'Active');
+    const thisSeasonPayments = payments.filter(p => p.season_id === currentSeason?.id);
+    const thisSeasonAgreed = thisSeasonPayments.reduce((sum, p) => sum + (parseFloat(p.agreed_amount) || 0), 0);
+    const thisSeasonPaid = thisSeasonPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const outstanding = thisSeasonAgreed - thisSeasonPaid;
+    
+    return { 
+      active: activeSponsorIds.size, 
+      totalValue: thisSeasonAgreed,
+      totalPaid, 
+      outstanding: Math.max(0, outstanding), 
+      expiringSoon: 0 
+    };
+  }, [sponsors, payments, seasons]);
 
   const sendInvoice = async (sponsor) => {
     if (!sponsor.email) {
@@ -143,22 +233,13 @@ export default function Sponsorships() {
       return;
     }
 
-    const outstanding = (sponsor.amount || 0) - (sponsor.amount_paid || 0);
     const emailBody = `
-Dear ${sponsor.contact_name || sponsor.company_name},
+Dear ${sponsor.contact_name || sponsor.name},
 
 Thank you for your continued support of ${CLUB_CONFIG.name}.
 
 Sponsorship Details:
-- Level: ${sponsor.sponsorship_level}
-- Total Amount: £${sponsor.amount}
-- Amount Paid: £${sponsor.amount_paid || 0}
-- Outstanding: £${outstanding}
-- Period: ${sponsor.start_date ? format(parseISO(sponsor.start_date), 'dd MMM yyyy') : 'N/A'} - ${sponsor.end_date ? format(parseISO(sponsor.end_date), 'dd MMM yyyy') : 'N/A'}
-
-${sponsor.benefits ? `Benefits Included:\n${sponsor.benefits}\n` : ''}
-
-Please arrange payment at your earliest convenience.
+- Type: ${sponsor.sponsor_type}
 
 Best regards,
 ${CLUB_CONFIG.name}
@@ -166,14 +247,12 @@ ${CLUB_CONFIG.name}
 
     await api.integrations.Core.SendEmail({
       to: sponsor.email,
-      subject: `Sponsorship Invoice - ${CLUB_CONFIG.name}`,
+      subject: `Sponsorship - ${CLUB_CONFIG.name}`,
       body: emailBody
     });
 
-    toast.success(`Invoice sent to ${sponsor.email}`);
+    toast.success(`Email sent to ${sponsor.email}`);
   };
-
-  const formatCurrency = (v) => `£${v?.toLocaleString() || 0}`;
 
   if (loading) {
     return (
@@ -213,13 +292,22 @@ ${CLUB_CONFIG.name}
               </div>
             </div>
             {canManageFinance(user) && (
-              <Button 
-                onClick={() => { setEditingSponsor(null); setShowSponsorDialog(true); }}
-                style={{ background: colors.gradientProfit }}
-                className="text-white font-semibold"
-              >
-                <Plus className="w-4 h-4 mr-1" /> Add Sponsor
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => setShowTypesDialog(true)}
+                  variant="outline"
+                  style={{ borderColor: colors.border, color: colors.textSecondary }}
+                >
+                  Manage Types
+                </Button>
+                <Button 
+                  onClick={() => { setEditingSponsor(null); setShowSponsorDialog(true); }}
+                  style={{ background: colors.gradientProfit }}
+                  className="text-white font-semibold"
+                >
+                  <Plus className="w-4 h-4 mr-1" /> Add Sponsor
+                </Button>
+              </div>
             )}
           </div>
         </div>
@@ -245,7 +333,7 @@ ${CLUB_CONFIG.name}
                 <DollarSign className="w-4 h-4" style={{ color: '#ffd700' }} />
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>Total Value</p>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>This Season</p>
                 <p className="text-lg font-bold" style={{ color: colors.textPrimary }}>{formatCurrency(stats.totalValue)}</p>
               </div>
             </div>
@@ -295,7 +383,11 @@ ${CLUB_CONFIG.name}
 
           <TabsContent value="active">
             <SponsorGrid 
-              sponsors={sponsors.filter(s => s.status === 'Active')}
+              sponsors={sponsors.filter(s => {
+                const hasRecentPayments = payments.some(p => p.sponsor_id === s.id);
+                return hasRecentPayments;
+              })}
+              payments={payments}
               onEdit={(s) => { setEditingSponsor(s); setShowSponsorDialog(true); }}
               onDelete={(id) => deleteSponsorMutation.mutate(id)}
               onSendInvoice={sendInvoice}
@@ -307,6 +399,7 @@ ${CLUB_CONFIG.name}
           <TabsContent value="all">
             <SponsorGrid 
               sponsors={sponsors}
+              payments={payments}
               onEdit={(s) => { setEditingSponsor(s); setShowSponsorDialog(true); }}
               onDelete={(id) => deleteSponsorMutation.mutate(id)}
               onSendInvoice={sendInvoice}
@@ -316,7 +409,22 @@ ${CLUB_CONFIG.name}
           </TabsContent>
 
           <TabsContent value="payments">
-            <PaymentsList payments={payments} sponsors={sponsors} />
+            <PaymentsList 
+              payments={payments} 
+              sponsors={sponsors}
+              onEdit={(payment) => {
+                const sponsor = sponsors.find(s => s.id === payment.sponsor_id);
+                setSelectedSponsor(sponsor);
+                setEditingPayment(payment);
+                setShowPaymentDialog(true);
+              }}
+              onDelete={(id) => {
+                if (confirm('Delete this payment? This will also remove it from the finance ledger.')) {
+                  deletePaymentMutation.mutate(id);
+                }
+              }}
+              canManage={canManageFinance(user)}
+            />
           </TabsContent>
         </Tabs>
       </div>
@@ -331,6 +439,9 @@ ${CLUB_CONFIG.name}
           </DialogHeader>
           <SponsorForm 
             sponsor={editingSponsor}
+            seasons={seasons}
+            competitions={competitions}
+            teams={teams}
             onSubmit={(data) => {
               if (editingSponsor) {
                 updateSponsorMutation.mutate({ id: editingSponsor.id, data });
@@ -344,25 +455,254 @@ ${CLUB_CONFIG.name}
       </Dialog>
 
       {/* Payment Dialog */}
-      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+      <Dialog open={showPaymentDialog} onOpenChange={(open) => {
+        setShowPaymentDialog(open);
+        if (!open) {
+          setEditingPayment(null);
+          setSelectedSponsor(null);
+        }
+      }}>
         <DialogContent style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
           <DialogHeader>
             <DialogTitle style={{ color: colors.textPrimary }}>
-              Record Payment - {selectedSponsor?.company_name}
+              {editingPayment ? 'Edit Payment' : `Record Payment - ${selectedSponsor?.name}`}
             </DialogTitle>
           </DialogHeader>
           <PaymentForm 
+            payment={editingPayment}
             sponsor={selectedSponsor}
-            onSubmit={(data) => createPaymentMutation.mutate(data)}
-            isLoading={createPaymentMutation.isPending}
+            seasons={seasons}
+            competitions={competitions}
+            teams={teams}
+            sponsorTypes={sponsorTypes}
+            onSubmit={(data) => {
+              if (editingPayment) {
+                updatePaymentMutation.mutate({ id: editingPayment.id, data });
+              } else {
+                createPaymentMutation.mutate(data);
+              }
+            }}
+            isLoading={createPaymentMutation.isPending || updatePaymentMutation.isPending}
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* Sponsor Types Manager */}
+      <Dialog open={showTypesDialog} onOpenChange={setShowTypesDialog}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: colors.textPrimary }}>Manage Sponsor Types</DialogTitle>
+          </DialogHeader>
+          <SponsorTypesManager />
         </DialogContent>
       </Dialog>
     </div>
   );
 }
 
-function SponsorGrid({ sponsors, onEdit, onDelete, onSendInvoice, onRecordPayment, canManage }) {
+function SponsorTypesManager() {
+  const queryClient = useQueryClient();
+  const [editingType, setEditingType] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const { data: allTypes = [] } = useQuery({
+    queryKey: ['allSponsorTypes'],
+    queryFn: () => api.entities.SponsorType.list('display_order'),
+  });
+
+  const createTypeMutation = useMutation({
+    mutationFn: (data) => api.entities.SponsorType.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sponsorTypes'] });
+      queryClient.invalidateQueries({ queryKey: ['allSponsorTypes'] });
+      setShowForm(false);
+      setEditingType(null);
+      toast.success('Type added');
+    },
+  });
+
+  const updateTypeMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.SponsorType.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sponsorTypes'] });
+      queryClient.invalidateQueries({ queryKey: ['allSponsorTypes'] });
+      setShowForm(false);
+      setEditingType(null);
+      toast.success('Type updated');
+    },
+  });
+
+  const deleteTypeMutation = useMutation({
+    mutationFn: (id) => api.entities.SponsorType.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sponsorTypes'] });
+      queryClient.invalidateQueries({ queryKey: ['allSponsorTypes'] });
+      toast.success('Type deleted');
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      {!showForm && (
+        <Button 
+          onClick={() => { setEditingType(null); setShowForm(true); }}
+          style={{ background: colors.gradientProfit }}
+          className="w-full"
+        >
+          <Plus className="w-4 h-4 mr-2" /> Add New Type
+        </Button>
+      )}
+
+      {showForm && (
+        <Card style={{ backgroundColor: colors.surfaceHover, border: `1px solid ${colors.border}` }}>
+          <CardContent className="p-4">
+            <SponsorTypeForm
+              type={editingType}
+              onSubmit={(data) => {
+                if (editingType) {
+                  updateTypeMutation.mutate({ id: editingType.id, data });
+                } else {
+                  createTypeMutation.mutate(data);
+                }
+              }}
+              onCancel={() => { setShowForm(false); setEditingType(null); }}
+              isLoading={createTypeMutation.isPending || updateTypeMutation.isPending}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="space-y-2">
+        {allTypes.map((type) => (
+          <Card key={type.id} style={{ backgroundColor: colors.surfaceHover, border: `1px solid ${colors.border}` }}>
+            <CardContent className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div 
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
+                  style={{ backgroundColor: `${type.color}20`, color: type.color }}
+                >
+                  {type.name[0]}
+                </div>
+                <div>
+                  <p className="font-semibold" style={{ color: colors.textPrimary }}>{type.name}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>
+                    Suggested: £{type.suggested_amount?.toLocaleString() || 0}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge style={{ 
+                  backgroundColor: type.is_active ? colors.profitLight : colors.lossLight,
+                  color: type.is_active ? colors.profit : colors.loss
+                }}>
+                  {type.is_active ? 'Active' : 'Inactive'}
+                </Badge>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => { setEditingType(type); setShowForm(true); }}
+                >
+                  <Edit2 className="w-4 h-4" />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => {
+                    if (confirm('Delete this sponsor type?')) {
+                      deleteTypeMutation.mutate(type.id);
+                    }
+                  }}
+                >
+                  <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SponsorTypeForm({ type, onSubmit, onCancel, isLoading }) {
+  const [formData, setFormData] = useState({
+    name: type?.name || '',
+    suggested_amount: type?.suggested_amount || 0,
+    color: type?.color || '#00d4ff',
+    display_order: type?.display_order || 0,
+    is_active: type?.is_active !== undefined ? type.is_active : true
+  });
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Type Name *</Label>
+          <Input 
+            value={formData.name} 
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="e.g., Platinum, Gold"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.textPrimary }}
+            required
+          />
+        </div>
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Suggested Amount (£) *</Label>
+          <Input 
+            type="number"
+            step="0.01"
+            value={formData.suggested_amount} 
+            onChange={(e) => setFormData({ ...formData, suggested_amount: parseFloat(e.target.value) || 0 })}
+            style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.textPrimary }}
+            required
+          />
+        </div>
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Color</Label>
+          <Input 
+            type="color"
+            value={formData.color} 
+            onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+            style={{ backgroundColor: colors.surface, borderColor: colors.border, height: '40px' }}
+          />
+        </div>
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Display Order</Label>
+          <Input 
+            type="number"
+            value={formData.display_order} 
+            onChange={(e) => setFormData({ ...formData, display_order: parseInt(e.target.value) || 0 })}
+            style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.textPrimary }}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <input 
+          type="checkbox"
+          checked={formData.is_active}
+          onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+          className="w-4 h-4"
+        />
+        <Label style={{ color: colors.textSecondary }}>Active</Label>
+      </div>
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" onClick={onCancel} className="flex-1">
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isLoading} className="flex-1" style={{ background: colors.gradientProfit }}>
+          {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+          {type ? 'Update' : 'Create'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function SponsorGrid({ sponsors, payments, onEdit, onDelete, onSendInvoice, onRecordPayment, canManage }) {
+  const { data: sponsorTypes = [] } = useQuery({
+    queryKey: ['sponsorTypes'],
+    queryFn: () => api.entities.SponsorType.filter({ is_active: true }, 'display_order'),
+  });
   if (sponsors.length === 0) {
     return (
       <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
@@ -377,133 +717,122 @@ function SponsorGrid({ sponsors, onEdit, onDelete, onSendInvoice, onRecordPaymen
   return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {sponsors.map(sponsor => {
-        const levelConfig = LEVEL_CONFIG[sponsor.sponsorship_level] || LEVEL_CONFIG.Other;
-        const outstanding = (sponsor.amount || 0) - (sponsor.amount_paid || 0);
-        const paidPercent = sponsor.amount ? ((sponsor.amount_paid || 0) / sponsor.amount * 100) : 0;
+      const sponsorPayments = payments.filter(p => p.sponsor_id === sponsor.id);
+      const totalPaid = sponsorPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const latestPayment = sponsorPayments[0]; // Most recent payment
+      const levelConfig = latestPayment ? getLevelConfig(latestPayment.sponsor_type, sponsorTypes) : { color: colors.textSecondary, bg: colors.surfaceHover, amount: 0 };
 
-        return (
-          <Card 
-            key={sponsor.id} 
-            className="overflow-hidden transition-all hover:border-opacity-80"
-            style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
-          >
-            <div className="p-4">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  {sponsor.logo_url ? (
-                    <img src={sponsor.logo_url} alt={sponsor.company_name} className="w-12 h-12 rounded-lg object-contain bg-white p-1" />
-                  ) : (
-                    <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: levelConfig.bg }}>
-                      <Building2 className="w-6 h-6" style={{ color: levelConfig.color }} />
-                    </div>
-                  )}
-                  <div>
-                    <h3 className="font-semibold" style={{ color: colors.textPrimary }}>{sponsor.company_name}</h3>
-                    <Badge style={{ backgroundColor: levelConfig.bg, color: levelConfig.color }}>
-                      {sponsor.sponsorship_level}
-                    </Badge>
-                  </div>
-                </div>
-                <Badge style={{ 
-                  backgroundColor: sponsor.status === 'Active' ? colors.profitLight : colors.pendingLight,
-                  color: sponsor.status === 'Active' ? colors.profit : colors.pending
-                }}>
-                  {sponsor.status}
-                </Badge>
-              </div>
-
-              <div className="space-y-2 mb-4">
-                <div className="flex justify-between text-sm">
-                  <span style={{ color: colors.textMuted }}>Value</span>
-                  <span className="font-semibold" style={{ color: colors.textPrimary }}>£{sponsor.amount?.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span style={{ color: colors.textMuted }}>Paid</span>
-                  <span style={{ color: colors.textProfit }}>£{(sponsor.amount_paid || 0).toLocaleString()}</span>
-                </div>
-                {outstanding > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span style={{ color: colors.textMuted }}>Outstanding</span>
-                    <span style={{ color: colors.pending }}>£{outstanding.toLocaleString()}</span>
+      return (
+        <Card 
+          key={sponsor.id} 
+          className="overflow-hidden transition-all hover:border-opacity-80"
+          style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
+        >
+          <div className="p-4">
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-3">
+                {sponsor.logo_url ? (
+                  <img src={sponsor.logo_url} alt={sponsor.name} className="w-12 h-12 rounded-lg object-contain bg-white p-1" />
+                ) : (
+                  <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: levelConfig.bg }}>
+                    <Building2 className="w-6 h-6" style={{ color: levelConfig.color }} />
                   </div>
                 )}
-                {/* Progress bar */}
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: colors.surfaceHover }}>
-                  <div 
-                    className="h-full rounded-full transition-all"
-                    style={{ width: `${Math.min(paidPercent, 100)}%`, backgroundColor: colors.profit }}
-                  />
+                <div className="flex-1">
+                  <h3 className="font-semibold" style={{ color: colors.textPrimary }}>{sponsor.name}</h3>
+                  {latestPayment && (
+                    <div className="flex items-center gap-2 flex-wrap mt-1">
+                      <Badge style={{ backgroundColor: levelConfig.bg, color: levelConfig.color }}>
+                        {latestPayment.sponsor_type}
+                      </Badge>
+                      <Badge 
+                        style={{ 
+                          backgroundColor: latestPayment.sponsorship_level === 'Club' ? '#10b98120' : latestPayment.sponsorship_level === 'League' ? '#3b82f620' : '#8b5cf620',
+                          color: latestPayment.sponsorship_level === 'Club' ? '#10b981' : latestPayment.sponsorship_level === 'League' ? '#3b82f6' : '#8b5cf6'
+                        }}
+                      >
+                        {latestPayment.sponsorship_level}
+                        {latestPayment.sponsorship_level === 'League' && latestPayment.competition_name && ` • ${latestPayment.competition_name}`}
+                        {latestPayment.sponsorship_level === 'Team' && latestPayment.team_name && ` • ${latestPayment.team_name}`}
+                      </Badge>
+                      {latestPayment.season_name && (
+                        <Badge variant="outline" style={{ borderColor: colors.border, color: colors.textMuted }}>
+                          {latestPayment.season_name}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
+            </div>
 
-              {sponsor.end_date && (
-                <div className="flex items-center gap-2 text-xs mb-4" style={{ color: colors.textMuted }}>
-                  <Calendar className="w-3 h-3" />
-                  Expires: {format(parseISO(sponsor.end_date), 'dd MMM yyyy')}
-                </div>
-              )}
-
-              {canManage && (
-                <div className="flex gap-2 pt-3" style={{ borderTop: `1px solid ${colors.border}` }}>
-                  <Button variant="ghost" size="sm" onClick={() => onEdit(sponsor)}>
-                    <Edit2 className="w-4 h-4" />
-                  </Button>
-                  {outstanding > 0 && (
-                    <>
-                      <Button variant="ghost" size="sm" onClick={() => onSendInvoice(sponsor)} title="Send Invoice">
-                        <Send className="w-4 h-4" style={{ color: colors.info }} />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => onRecordPayment(sponsor)} title="Record Payment">
-                        <CreditCard className="w-4 h-4" style={{ color: colors.profit }} />
-                      </Button>
-                    </>
-                  )}
-                  {sponsor.website_url && (
-                    <a href={sponsor.website_url} target="_blank" rel="noopener noreferrer">
-                      <Button variant="ghost" size="sm">
-                        <ExternalLink className="w-4 h-4" />
-                      </Button>
-                    </a>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => onDelete(sponsor.id)} className="ml-auto">
-                    <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
-                  </Button>
-                </div>
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-sm">
+                <span style={{ color: colors.textMuted }}>Total Agreed</span>
+                <span className="font-semibold" style={{ color: colors.textSecondary }}>
+                  {formatCurrency(sponsorPayments.reduce((sum, p) => sum + (parseFloat(p.agreed_amount) || 0), 0))}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span style={{ color: colors.textMuted }}>Total Paid</span>
+                <span className="font-semibold" style={{ color: colors.textProfit }}>{formatCurrency(totalPaid)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span style={{ color: colors.textMuted }}>Payments</span>
+                <span style={{ color: colors.textSecondary }}>{sponsorPayments.length}</span>
+              </div>
+              {latestPayment?.description && (
+                <p className="text-xs pt-1" style={{ color: colors.textMuted }}>Latest: {latestPayment.description}</p>
               )}
             </div>
-          </Card>
-        );
+            {sponsor.notes && (
+              <p className="text-sm mb-4 pt-2" style={{ color: colors.textMuted, borderTop: `1px solid ${colors.border}` }}>{sponsor.notes}</p>
+            )}
+
+            {canManage && (
+              <div className="flex gap-2 pt-3" style={{ borderTop: `1px solid ${colors.border}` }}>
+                <Button variant="ghost" size="sm" onClick={() => onEdit(sponsor)} title="Edit Contact Info">
+                  <Edit2 className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => onSendInvoice(sponsor)} title="Send Email">
+                  <Send className="w-4 h-4" style={{ color: colors.info }} />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => onRecordPayment(sponsor)} title="Record Payment">
+                  <CreditCard className="w-4 h-4" style={{ color: colors.profit }} />
+                </Button>
+                {sponsor.website && (
+                  <a href={sponsor.website} target="_blank" rel="noopener noreferrer">
+                    <Button variant="ghost" size="sm" title="Visit Website">
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
+                  </a>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => onDelete(sponsor.id)} className="ml-auto" title="Delete Sponsor">
+                  <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
+                </Button>
+              </div>
+            )}
+          </div>
+        </Card>
+      );
       })}
     </div>
   );
 }
 
-function SponsorForm({ sponsor, onSubmit, isLoading }) {
+function SponsorForm({ sponsor, seasons, competitions, teams, onSubmit, isLoading }) {
   const [formData, setFormData] = useState({
-    company_name: sponsor?.company_name || '',
+    name: sponsor?.name || '',
     contact_name: sponsor?.contact_name || '',
     email: sponsor?.email || '',
     phone: sponsor?.phone || '',
     logo_url: sponsor?.logo_url || '',
-    website_url: sponsor?.website_url || '',
-    sponsorship_level: sponsor?.sponsorship_level || 'Bronze',
-    amount: sponsor?.amount || LEVEL_CONFIG.Bronze.amount,
-    start_date: sponsor?.start_date || format(new Date(), 'yyyy-MM-dd'),
-    end_date: sponsor?.end_date || format(addDays(new Date(), 365), 'yyyy-MM-dd'),
-    status: sponsor?.status || 'Active',
-    benefits: sponsor?.benefits || '',
-    notes: sponsor?.notes || '',
-    season: sponsor?.season || `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`
+    website: sponsor?.website || '',
+    notes: sponsor?.notes || ''
   });
   const [uploading, setUploading] = useState(false);
 
-  const handleLevelChange = (level) => {
-    setFormData({ 
-      ...formData, 
-      sponsorship_level: level,
-      amount: LEVEL_CONFIG[level]?.amount || formData.amount
-    });
-  };
+
 
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -524,8 +853,23 @@ function SponsorForm({ sponsor, onSubmit, isLoading }) {
 
     setUploading(true);
     try {
-      const { file_url } = await api.integrations.Core.UploadFile({ file });
-      setFormData({ ...formData, logo_url: file_url });
+      // Upload to local public/images/sponsors folder
+      const formDataUpload = new FormData();
+      formDataUpload.append('file', file);
+      formDataUpload.append('folder', 'sponsors');
+      
+      const response = await fetch('http://localhost:5000/api/upload-local', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('access_token')}`
+        },
+        body: formDataUpload
+      });
+
+      if (!response.ok) throw new Error('Upload failed');
+      
+      const { file_path } = await response.json();
+      setFormData({ ...formData, logo_url: file_path });
       toast.success('Logo uploaded');
     } catch (error) {
       toast.error('Failed to upload image');
@@ -536,24 +880,36 @@ function SponsorForm({ sponsor, onSubmit, isLoading }) {
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="space-y-4 pt-2">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2">
+      <div className="space-y-3">
+        <div>
           <Label style={{ color: colors.textSecondary }}>Company Name *</Label>
           <Input 
-            value={formData.company_name} 
-            onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
+            value={formData.name} 
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
             required
           />
         </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Contact Name</Label>
-          <Input 
-            value={formData.contact_name} 
-            onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-          />
+        
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Contact Name</Label>
+            <Input 
+              value={formData.contact_name} 
+              onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            />
+          </div>
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Phone</Label>
+            <Input 
+              value={formData.phone} 
+              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            />
+          </div>
         </div>
+
         <div>
           <Label style={{ color: colors.textSecondary }}>Email</Label>
           <Input 
@@ -563,151 +919,34 @@ function SponsorForm({ sponsor, onSubmit, isLoading }) {
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
           />
         </div>
+
         <div>
-          <Label style={{ color: colors.textSecondary }}>Level *</Label>
-          <Select value={formData.sponsorship_level} onValueChange={handleLevelChange}>
-            <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.keys(LEVEL_CONFIG).map(level => (
-                <SelectItem key={level} value={level}>{level}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Amount (£) *</Label>
-          <Input 
-            type="number"
-            value={formData.amount} 
-            onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-            required
-          />
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Start Date</Label>
-          <Input 
-            type="date"
-            value={formData.start_date} 
-            onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-          />
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>End Date</Label>
-          <Input 
-            type="date"
-            value={formData.end_date} 
-            onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-          />
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Status</Label>
-          <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v })}>
-            <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Active">Active</SelectItem>
-              <SelectItem value="Pending">Pending</SelectItem>
-              <SelectItem value="Expired">Expired</SelectItem>
-              <SelectItem value="Cancelled">Cancelled</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Season</Label>
-          <Input 
-            value={formData.season} 
-            onChange={(e) => setFormData({ ...formData, season: e.target.value })}
-            placeholder="e.g., 2024-2025"
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-          />
-        </div>
-        <div className="col-span-2">
-          <Label style={{ color: colors.textSecondary }}>Logo (Max 2MB)</Label>
-          <div className="flex items-center gap-3">
-            {formData.logo_url ? (
-              <div className="relative">
-                <img 
-                  src={formData.logo_url} 
-                  alt="Logo preview" 
-                  className="w-16 h-16 rounded-lg object-contain bg-white p-1"
-                />
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, logo_url: '' })}
-                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center"
-                  style={{ backgroundColor: colors.loss }}
-                >
-                  <X className="w-3 h-3 text-white" />
-                </button>
-              </div>
-            ) : (
-              <div 
-                className="w-16 h-16 rounded-lg flex items-center justify-center"
-                style={{ backgroundColor: colors.surfaceHover, border: `1px dashed ${colors.border}` }}
-              >
-                <Building2 className="w-6 h-6" style={{ color: colors.textMuted }} />
-              </div>
-            )}
-            <div className="flex-1">
-              <label className="cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                  disabled={uploading}
-                />
-                <div 
-                  className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                  style={{ 
-                    backgroundColor: colors.surfaceHover, 
-                    border: `1px solid ${colors.border}`,
-                    color: colors.textSecondary 
-                  }}
-                >
-                  {uploading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Upload className="w-4 h-4" />
-                  )}
-                  {uploading ? 'Uploading...' : 'Upload Image'}
-                </div>
-              </label>
-              <p className="text-xs mt-1" style={{ color: colors.textMuted }}>PNG, JPG up to 2MB</p>
-            </div>
-          </div>
-        </div>
-        <div className="col-span-2">
           <Label style={{ color: colors.textSecondary }}>Website URL</Label>
           <Input 
-            value={formData.website_url} 
-            onChange={(e) => setFormData({ ...formData, website_url: e.target.value })}
+            value={formData.website} 
+            onChange={(e) => setFormData({ ...formData, website: e.target.value })}
             placeholder="https://..."
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
           />
         </div>
-        <div className="col-span-2">
-          <Label style={{ color: colors.textSecondary }}>Benefits Included</Label>
-          <Textarea 
-            value={formData.benefits} 
-            onChange={(e) => setFormData({ ...formData, benefits: e.target.value })}
-            placeholder="Logo on kit, website banner, match day announcements..."
-            rows={2}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+
+        <div>
+          <ImageSelector
+            folder="sponsors"
+            currentImage={formData.logo_url}
+            onSelect={(path) => setFormData({ ...formData, logo_url: path })}
+            label="Sponsor Logo"
+            aspectRatio="square"
           />
         </div>
-        <div className="col-span-2">
+
+        <div>
           <Label style={{ color: colors.textSecondary }}>Notes</Label>
           <Textarea 
             value={formData.notes} 
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
             rows={2}
+            placeholder="General notes about this sponsor..."
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
           />
         </div>
@@ -720,40 +959,61 @@ function SponsorForm({ sponsor, onSubmit, isLoading }) {
   );
 }
 
-function PaymentForm({ sponsor, onSubmit, isLoading }) {
+function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTypes, onSubmit, isLoading }) {
   const [formData, setFormData] = useState({
-    sponsor_id: sponsor?.id || '',
-    sponsor_name: sponsor?.company_name || '',
-    amount: (sponsor?.amount || 0) - (sponsor?.amount_paid || 0),
-    payment_date: format(new Date(), 'yyyy-MM-dd'),
-    payment_method: 'Bank Transfer',
-    reference: '',
-    notes: ''
+    sponsor_id: payment?.sponsor_id || sponsor?.id || '',
+    sponsor_name: payment?.sponsor_name || sponsor?.name || '',
+    agreed_amount: payment?.agreed_amount || 0,
+    amount: payment?.amount || 0,
+    payment_date: payment?.payment_date || format(new Date(), 'yyyy-MM-dd'),
+    season_id: payment?.season_id || seasons[0]?.id || '',
+    season_name: payment?.season_name || seasons[0]?.name || '',
+    sponsorship_level: payment?.sponsorship_level || 'Club',
+    sponsor_type: payment?.sponsor_type || 'Bronze',
+    competition_id: payment?.competition_id || '',
+    competition_name: payment?.competition_name || '',
+    team_id: payment?.team_id || '',
+    team_name: payment?.team_name || '',
+    payment_method: payment?.payment_method || 'Bank Transfer',
+    reference: payment?.reference || '',
+    description: payment?.description || '',
+    notes: payment?.notes || ''
   });
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="space-y-4 pt-2">
-      <div className="p-3 rounded-lg" style={{ backgroundColor: colors.surfaceHover }}>
-        <div className="flex justify-between text-sm">
-          <span style={{ color: colors.textMuted }}>Outstanding</span>
-          <span className="font-semibold" style={{ color: colors.pending }}>
-            £{((sponsor?.amount || 0) - (sponsor?.amount_paid || 0)).toLocaleString()}
-          </span>
+      <div className="space-y-3">
+        {/* Payment Details */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Agreed Amount (£)</Label>
+            <Input 
+              type="number"
+              step="0.01"
+              value={formData.agreed_amount} 
+              onChange={(e) => {
+                const agreed = parseFloat(e.target.value) || 0;
+                setFormData({ ...formData, agreed_amount: agreed, amount: agreed });
+              }}
+              placeholder="Contract amount"
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            />
+          </div>
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Amount Paid (£) *</Label>
+            <Input 
+              type="number"
+              step="0.01"
+              value={formData.amount} 
+              onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
+              placeholder="Actual received"
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+              required
+            />
+          </div>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
         <div>
-          <Label style={{ color: colors.textSecondary }}>Amount (£) *</Label>
-          <Input 
-            type="number"
-            value={formData.amount} 
-            onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-            required
-          />
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Date *</Label>
+          <Label style={{ color: colors.textSecondary }}>Payment Date *</Label>
           <Input 
             type="date"
             value={formData.payment_date} 
@@ -762,47 +1022,197 @@ function PaymentForm({ sponsor, onSubmit, isLoading }) {
             required
           />
         </div>
+
+        {/* Sponsorship Context */}
         <div>
-          <Label style={{ color: colors.textSecondary }}>Method</Label>
-          <Select value={formData.payment_method} onValueChange={(v) => setFormData({ ...formData, payment_method: v })}>
+          <Label style={{ color: colors.textSecondary }}>Season *</Label>
+          <Select 
+            value={formData.season_id} 
+            onValueChange={(seasonId) => {
+              const selectedSeason = seasons.find(s => s.id === seasonId);
+              setFormData({ 
+                ...formData, 
+                season_id: seasonId,
+                season_name: selectedSeason?.name || ''
+              });
+            }}
+          >
             <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
-              <SelectValue />
+              <SelectValue placeholder="Select season" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-              <SelectItem value="Cheque">Cheque</SelectItem>
-              <SelectItem value="Cash">Cash</SelectItem>
-              <SelectItem value="Card">Card</SelectItem>
-              <SelectItem value="Online">Online</SelectItem>
+              {seasons.map(season => (
+                <SelectItem key={season.id} value={season.id}>{season.name}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Sponsorship Level *</Label>
+            <Select 
+              value={formData.sponsorship_level} 
+              onValueChange={(v) => setFormData({ 
+                ...formData, 
+                sponsorship_level: v,
+                competition_id: v !== 'League' ? '' : formData.competition_id,
+                competition_name: v !== 'League' ? '' : formData.competition_name,
+                team_id: v !== 'Team' ? '' : formData.team_id,
+                team_name: v !== 'Team' ? '' : formData.team_name
+              })}
+            >
+              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Club">Club Level</SelectItem>
+                <SelectItem value="League">League/Competition</SelectItem>
+                <SelectItem value="Team">Team Level</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Sponsor Type *</Label>
+            <Select 
+              value={formData.sponsor_type} 
+              onValueChange={(v) => {
+                const selectedType = sponsorTypes.find(t => t.name === v);
+                setFormData({ 
+                  ...formData, 
+                  sponsor_type: v,
+                  agreed_amount: selectedType?.suggested_amount || formData.agreed_amount
+                });
+              }}
+            >
+              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sponsorTypes.map(type => (
+                  <SelectItem key={type.id} value={type.name}>
+                    {type.name} (£{type.suggested_amount?.toLocaleString() || 0})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {formData.sponsorship_level === 'League' && (
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Competition *</Label>
+            <Select 
+              value={formData.competition_id} 
+              onValueChange={(compId) => {
+                const selectedComp = competitions.find(c => c.id === compId);
+                setFormData({ 
+                  ...formData, 
+                  competition_id: compId,
+                  competition_name: selectedComp?.name || ''
+                });
+              }}
+            >
+              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                <SelectValue placeholder="Select competition" />
+              </SelectTrigger>
+              <SelectContent>
+                {competitions.map(comp => (
+                  <SelectItem key={comp.id} value={comp.id}>{comp.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {formData.sponsorship_level === 'Team' && (
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Team *</Label>
+            <Select 
+              value={formData.team_id} 
+              onValueChange={(teamId) => {
+                const selectedTeam = teams.find(t => t.id === teamId);
+                setFormData({ 
+                  ...formData, 
+                  team_id: teamId,
+                  team_name: selectedTeam?.name || ''
+                });
+              }}
+            >
+              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                <SelectValue placeholder="Select team" />
+              </SelectTrigger>
+              <SelectContent>
+                {teams.map(team => (
+                  <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         <div>
-          <Label style={{ color: colors.textSecondary }}>Reference</Label>
+          <Label style={{ color: colors.textSecondary }}>Description</Label>
           <Input 
-            value={formData.reference} 
-            onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+            value={formData.description} 
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            placeholder="e.g., Kit sponsorship for 2024-25 season"
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
           />
         </div>
-        <div className="col-span-2">
+
+        {/* Payment Method */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Payment Method</Label>
+            <Select value={formData.payment_method} onValueChange={(v) => setFormData({ ...formData, payment_method: v })}>
+              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                <SelectItem value="Cheque">Cheque</SelectItem>
+                <SelectItem value="Cash">Cash</SelectItem>
+                <SelectItem value="Card">Card</SelectItem>
+                <SelectItem value="Online">Online</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Reference</Label>
+            <Input 
+              value={formData.reference} 
+              onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+              placeholder="Bank ref / Receipt no."
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            />
+          </div>
+        </div>
+
+        <div>
           <Label style={{ color: colors.textSecondary }}>Notes</Label>
-          <Input 
+          <Textarea 
             value={formData.notes} 
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+            rows={2}
+            placeholder="Additional notes..."
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
           />
         </div>
       </div>
       <Button type="submit" disabled={isLoading} className="w-full" style={{ background: colors.gradientProfit }}>
         {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-        Record Payment
+        {payment ? 'Update Payment' : 'Record Payment'}
       </Button>
     </form>
   );
 }
 
-function PaymentsList({ payments, sponsors }) {
+function PaymentsList({ payments, sponsors, onEdit, onDelete, canManage }) {
+  const { data: sponsorTypes = [] } = useQuery({
+    queryKey: ['sponsorTypes'],
+    queryFn: () => api.entities.SponsorType.filter({ is_active: true }, 'display_order'),
+  });
   if (payments.length === 0) {
     return (
       <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
@@ -822,26 +1232,81 @@ function PaymentsList({ payments, sponsors }) {
             const sponsor = sponsors.find(s => s.id === payment.sponsor_id);
             return (
               <div key={payment.id} className="flex items-center justify-between p-4 hover:bg-white/[0.02]">
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-1">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: colors.profitLight }}>
                     <CreditCard className="w-5 h-5" style={{ color: colors.profit }} />
                   </div>
-                  <div>
-                    <p className="font-medium" style={{ color: colors.textPrimary }}>{payment.sponsor_name || sponsor?.company_name}</p>
-                    <p className="text-xs" style={{ color: colors.textMuted }}>
-                      {payment.payment_date ? format(parseISO(payment.payment_date), 'dd MMM yyyy') : '-'} • {payment.payment_method}
-                    </p>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="font-medium" style={{ color: colors.textPrimary }}>{payment.sponsor_name || sponsor?.name}</p>
+                      {payment.sponsor_type && (
+                        <Badge style={{ 
+                          backgroundColor: getLevelConfig(payment.sponsor_type, sponsorTypes).bg,
+                          color: getLevelConfig(payment.sponsor_type, sponsorTypes).color
+                        }}>
+                          {payment.sponsor_type}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs flex-wrap" style={{ color: colors.textMuted }}>
+                      <span>{payment.payment_date ? format(parseISO(payment.payment_date), 'dd MMM yyyy') : '-'}</span>
+                      <span>•</span>
+                      <span>{payment.payment_method}</span>
+                      {payment.season_name && (
+                        <>
+                          <span>•</span>
+                          <span>{payment.season_name}</span>
+                        </>
+                      )}
+                      {payment.sponsorship_level && (
+                        <>
+                          <span>•</span>
+                          <span>{payment.sponsorship_level}</span>
+                        </>
+                      )}
+                    </div>
+                    {payment.description && (
+                      <p className="text-xs mt-1" style={{ color: colors.textMuted }}>{payment.description}</p>
+                    )}
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-semibold" style={{ color: colors.textProfit }}>+£{payment.amount?.toLocaleString()}</p>
-                  {payment.reference && (
-                    <p className="text-xs" style={{ color: colors.textMuted }}>Ref: {payment.reference}</p>
+                <div className="flex items-center gap-3 ml-4">
+                  <div className="text-right">
+                    <p className="font-semibold" style={{ color: colors.textProfit }}>
+                      {formatCurrency(payment.amount)}
+                    </p>
+                    {payment.agreed_amount && parseFloat(payment.agreed_amount) !== parseFloat(payment.amount) && (
+                      <p className="text-xs" style={{ color: colors.textMuted }}>
+                        of {formatCurrency(payment.agreed_amount)} agreed
+                      </p>
+                    )}
+                    {payment.reference && (
+                      <p className="text-xs" style={{ color: colors.textMuted }}>Ref: {payment.reference}</p>
+                    )}
+                  </div>
+                  {canManage && (
+                    <>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => onEdit(payment)}
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => onDelete(payment.id)}
+                        style={{ color: colors.loss }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </>
                   )}
                 </div>
-              </div>
-            );
-          })}
+                </div>
+                );
+                })}
         </div>
       </CardContent>
     </Card>

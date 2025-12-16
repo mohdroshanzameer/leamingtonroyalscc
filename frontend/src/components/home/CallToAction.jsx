@@ -63,25 +63,52 @@ export default function CallToAction() {
     return null;
   }
 
+  const handleRegisterClick = () => {
+    if (user) {
+      // Logged-in users go to proper onboarding
+      navigate(createPageUrl('PlayerOnboarding'));
+    } else {
+      // Non-logged-in users see registration modal
+      setShowRegistration(true);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     
-    const membership = await api.entities.Membership.create({
-      member_name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      membership_type: 'Adult',
-      status: 'Pending',
-      fee_amount: REGISTRATION_FEE,
-      payment_status: 'Unpaid',
-      notes: `Role: ${formData.role}, Batting: ${formData.batting_style}, Bowling: ${formData.bowling_style || 'N/A'}`
-    });
-    
-    setMembershipId(membership.id);
-    setIsSubmitting(false);
-    setShowRegistration(false);
-    setShowPayment(true);
+    try {
+      // Create player profile first
+      const player = await api.entities.TeamPlayer.create({
+        player_name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        role: formData.role,
+        batting_style: formData.batting_style,
+        bowling_style: formData.bowling_style,
+        bio: formData.bio,
+        status: 'Active',
+      });
+      
+      // Then create membership linked to player
+      const membership = await api.entities.Membership.create({
+        player_id: player.id,
+        member_name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        membership_type: 'Adult',
+        status: 'Pending',
+        fee_amount: REGISTRATION_FEE,
+      });
+      
+      setMembershipId(membership.id);
+      setIsSubmitting(false);
+      setShowRegistration(false);
+      setShowPayment(true);
+    } catch (error) {
+      toast.error('Registration failed. Please try again.');
+      setIsSubmitting(false);
+    }
   };
 
   const handlePaymentComplete = (result) => {
@@ -117,7 +144,7 @@ export default function CallToAction() {
           </p>
           <div className="flex flex-col gap-3">
             <button 
-              onClick={() => setShowRegistration(true)}
+              onClick={handleRegisterClick}
               className="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors"
               style={{ 
                 backgroundColor: '#000',
@@ -126,7 +153,7 @@ export default function CallToAction() {
                 fontSize: 'clamp(0.875rem, 2vw, 1rem)',
               }}
             >
-              <UserPlus style={{ width: '1rem', height: '1rem' }} /> Register as Player
+              <UserPlus style={{ width: '1rem', height: '1rem' }} /> {user ? 'Complete Player Profile' : 'Register as Player'}
             </button>
             <Link 
               to={createPageUrl('Contact')}

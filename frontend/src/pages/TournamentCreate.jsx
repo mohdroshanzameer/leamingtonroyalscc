@@ -17,6 +17,7 @@ const colors = getFinanceTheme();
 
 export default function TournamentCreate() {
   const [step, setStep] = useState(1);
+  const [user, setUser] = useState(null);
   const [formData, setFormData] = useState({
     name: '',
     season_id: '',
@@ -38,6 +39,19 @@ export default function TournamentCreate() {
     organizer_contact: '',
     is_public: true,
   });
+
+  // Fetch user and auto-populate preferences
+  React.useEffect(() => {
+    api.auth.me().then(u => {
+      setUser(u);
+      if (u.default_season_id) {
+        updateField('season_id', u.default_season_id);
+      }
+      if (u.default_competition_id) {
+        updateField('competition_id', u.default_competition_id);
+      }
+    }).catch(() => {});
+  }, []);
 
   const updateField = (field, value) => {
     setFormData(prev => {
@@ -166,6 +180,7 @@ export default function TournamentCreate() {
     createMutation.mutate({
       ...formData,
       status: 'draft',
+      created_by: user?.email,
       // Denormalized name fields for faster loading
       season_name: season?.name || '',
       competition_name: comp?.short_name || comp?.name || '',
@@ -276,7 +291,16 @@ export default function TournamentCreate() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <Label style={{ color: colors.textSecondary }}>Season *</Label>
-                    <Select value={formData.season_id} onValueChange={(v) => updateField('season_id', v)}>
+                    <Select 
+                      value={formData.season_id} 
+                      onValueChange={async (v) => {
+                        updateField('season_id', v);
+                        // Save to user preferences
+                        if (user) {
+                          await api.auth.updateMe({ default_season_id: v }).catch(() => {});
+                        }
+                      }}
+                    >
                       <SelectTrigger className="mt-2" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
                         <SelectValue placeholder="Select Season" />
                       </SelectTrigger>
@@ -293,9 +317,13 @@ export default function TournamentCreate() {
                     <Label style={{ color: colors.textSecondary }}>Competition</Label>
                     <Select 
                       value={formData.competition_id} 
-                      onValueChange={(v) => {
+                      onValueChange={async (v) => {
                         updateField('competition_id', v);
                         updateField('sub_competition_id', '');
+                        // Save to user preferences
+                        if (user) {
+                          await api.auth.updateMe({ default_competition_id: v }).catch(() => {});
+                        }
                       }}
                     >
                       <SelectTrigger className="mt-2" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
@@ -309,14 +337,14 @@ export default function TournamentCreate() {
                     </Select>
                   </div>
                   <div>
-                    <Label style={{ color: colors.textSecondary }}>Division</Label>
+                    <Label style={{ color: colors.textSecondary }}>Sub-Competition</Label>
                     <Select 
                       value={formData.sub_competition_id} 
                       onValueChange={(v) => updateField('sub_competition_id', v)}
                       disabled={!formData.competition_id || subCompetitions.length === 0}
                     >
                       <SelectTrigger className="mt-2" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
-                        <SelectValue placeholder={subCompetitions.length === 0 ? "No divisions" : "Select"} />
+                        <SelectValue placeholder={subCompetitions.length === 0 ? "No sub-competitions" : "Select"} />
                       </SelectTrigger>
                       <SelectContent>
                         {subCompetitions.map(c => (

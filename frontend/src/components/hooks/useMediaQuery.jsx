@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { BREAKPOINTS } from '../constants/breakpoints';
 
 /**
  * Custom hook to detect screen size
@@ -28,17 +29,24 @@ export function useMediaQuery(query) {
 }
 
 /**
- * Convenience hook to check if screen is desktop (lg breakpoint: 1024px)
+ * Convenience hook to check if screen is desktop (1024px+)
  */
 export function useIsDesktop() {
-  return useMediaQuery('(min-width: 1024px)');
+  return useMediaQuery(`(min-width: ${BREAKPOINTS.laptop}px)`);
 }
 
 /**
- * Convenience hook to check if screen is tablet or larger (md breakpoint: 768px)
+ * Convenience hook to check if screen is tablet or larger (768px+)
  */
 export function useIsTablet() {
-  return useMediaQuery('(min-width: 768px)');
+  return useMediaQuery(`(min-width: ${BREAKPOINTS.tablet}px)`);
+}
+
+/**
+ * Convenience hook to check if screen is large desktop (1536px+)
+ */
+export function useIsLargeDesktop() {
+  return useMediaQuery(`(min-width: ${BREAKPOINTS.largeDesktop}px)`);
 }
 
 export default useMediaQuery;

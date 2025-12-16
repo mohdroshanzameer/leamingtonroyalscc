@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '@/components/api/apiClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -21,7 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from 'sonner';
 import { format, subMonths, startOfMonth, endOfMonth, isWithinInterval, startOfYear, endOfYear } from 'date-fns';
 import { Link } from 'react-router-dom';
-import { createPageUrl } from '../utils';
+import { createPageUrl } from '@/components/utils';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 
 import MembershipManager from '../components/finance/MembershipManager';
@@ -39,6 +38,7 @@ import { CLUB_CONFIG, getFinanceTheme } from '../components/ClubConfig';
 const colors = getFinanceTheme();
 
 export default function Finance() {
+  console.log('✅ Finance.js - Component loaded successfully');
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState('dashboard');
@@ -65,24 +65,21 @@ export default function Finance() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
+    console.log('🔍 Finance Page - Component Mounted');
+    console.log('🔍 Finance Page - Window location:', window.location.href);
     let mounted = true;
     api.auth.me()
       .then(u => { 
         if (mounted) {
           setUser(u);
           console.log('🔍 Finance Page - User Data:', u);
+          console.log('🔍 Finance Page - User club_role:', u?.club_role);
           console.log('🔍 Finance Page - canViewFinance:', canViewFinance(u));
         }
       })
-      .catch((err) => {
-        if (!mounted) return;
-        // Only redirect to sign-in when the API confirms the user is not authorised.
-        // Do NOT redirect on 404/500/network errors.
-        if (err?.status === 401 || err?.status === 403) {
-          api.auth.redirectToLogin();
-          return;
-        }
-        console.error('Finance: failed to load current user', err);
+      .catch((err) => { 
+        console.log('🔍 Finance Page - Auth Error:', err);
+        if (mounted) api.auth.redirectToLogin(); 
       })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
@@ -90,7 +87,10 @@ export default function Finance() {
 
   const { data: transactions = [], isLoading: transactionsLoading } = useQuery({
     queryKey: ['transactions'],
-    queryFn: () => api.entities.Transaction.list('-date', 500),
+    queryFn: async () => {
+      const allTx = await api.entities.Transaction.list('-date', 500);
+      return allTx.filter(t => !t.is_deleted);
+    },
     staleTime: 0,
     refetchOnMount: 'always',
   });
@@ -204,53 +204,62 @@ export default function Finance() {
     const lastMonthStart = startOfMonth(subMonths(now, 1));
     const lastMonthEnd = endOfMonth(subMonths(now, 1));
 
-    const completedTx = transactions.filter(t => t.status === 'Completed');
+    const completedTx = (transactions || []).filter(t => t.status === 'Completed' && !t.is_deleted);
     
     // All-time totals (only verified payments)
-    const allTimeTxIncome = completedTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const allTimeTxExpenses = completedTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const allTimePlayerPayments = playerPayments.filter(p => p.verified).reduce((sum, p) => sum + (p.amount || 0), 0);
-    const balance = (allTimeTxIncome + allTimePlayerPayments) - allTimeTxExpenses;
-    const totalIncome = allTimeTxIncome + allTimePlayerPayments;
-    const totalExpenses = allTimeTxExpenses;
+    const allTimeTxIncome = completedTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const allTimeTxExpenses = completedTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const allTimePlayerPayments = (playerPayments || []).filter(p => p.verified).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const balance = ((allTimeTxIncome || 0) + (allTimePlayerPayments || 0)) - (allTimeTxExpenses || 0);
+    const totalIncome = (allTimeTxIncome || 0) + (allTimePlayerPayments || 0);
+    const totalExpenses = allTimeTxExpenses || 0;
 
     // This month transactions
-    const thisMonthTx = completedTx.filter(t => isWithinInterval(new Date(t.date), { start: thisMonthStart, end: thisMonthEnd }));
-    const thisMonthTxIncome = thisMonthTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const thisMonthExpense = thisMonthTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (t.amount || 0), 0);
+    const thisMonthTx = completedTx.filter(t => t.date && isWithinInterval(new Date(t.date), { start: thisMonthStart, end: thisMonthEnd }));
+    const thisMonthTxIncome = thisMonthTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const thisMonthExpense = thisMonthTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
     
     // This month player payments (only verified)
-    const thisMonthPlayerPayments = playerPayments
+    const thisMonthPlayerPayments = (playerPayments || [])
       .filter(p => p.verified && p.payment_date && isWithinInterval(new Date(p.payment_date), { start: thisMonthStart, end: thisMonthEnd }))
-      .reduce((sum, p) => sum + (p.amount || 0), 0);
-    const thisMonthIncome = thisMonthTxIncome + thisMonthPlayerPayments;
+      .reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const thisMonthIncome = (thisMonthTxIncome || 0) + (thisMonthPlayerPayments || 0);
 
     // Last month for trend (only verified payments)
-    const lastMonthTx = completedTx.filter(t => isWithinInterval(new Date(t.date), { start: lastMonthStart, end: lastMonthEnd }));
-    const lastMonthTxIncome = lastMonthTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const lastMonthPlayerPayments = playerPayments
+    const lastMonthTx = completedTx.filter(t => t.date && isWithinInterval(new Date(t.date), { start: lastMonthStart, end: lastMonthEnd }));
+    const lastMonthTxIncome = lastMonthTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const lastMonthPlayerPayments = (playerPayments || [])
       .filter(p => p.verified && p.payment_date && isWithinInterval(new Date(p.payment_date), { start: lastMonthStart, end: lastMonthEnd }))
-      .reduce((sum, p) => sum + (p.amount || 0), 0);
-    const lastMonthIncome = lastMonthTxIncome + lastMonthPlayerPayments;
-    const incomeTrend = lastMonthIncome > 0 ? ((thisMonthIncome - lastMonthIncome) / lastMonthIncome * 100) : 0;
+      .reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const lastMonthIncome = (lastMonthTxIncome || 0) + (lastMonthPlayerPayments || 0);
+    const incomeTrend = (lastMonthIncome || 0) > 0 ? (((thisMonthIncome || 0) - (lastMonthIncome || 0)) / (lastMonthIncome || 0) * 100) : 0;
 
     // Monthly data for mini chart
     const monthlyData = [];
     for (let i = 5; i >= 0; i--) {
       const mStart = startOfMonth(subMonths(now, i));
       const mEnd = endOfMonth(subMonths(now, i));
-      const mTx = completedTx.filter(t => isWithinInterval(new Date(t.date), { start: mStart, end: mEnd }));
-      const mPlayerPayments = playerPayments.filter(p => p.verified && p.payment_date && isWithinInterval(new Date(p.payment_date), { start: mStart, end: mEnd }));
+      const mTx = completedTx.filter(t => t.date && isWithinInterval(new Date(t.date), { start: mStart, end: mEnd }));
+      const mPlayerPayments = (playerPayments || []).filter(p => p.verified && p.payment_date && isWithinInterval(new Date(p.payment_date), { start: mStart, end: mEnd }));
       monthlyData.push({
         month: format(mStart, 'MMM'),
-        income: mTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (t.amount || 0), 0) + mPlayerPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
-        expenses: mTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (t.amount || 0), 0),
+        income: mTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0) + mPlayerPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0),
+        expenses: mTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0),
       });
     }
 
-    const activeMemberships = memberships.filter(m => m.status === 'Active').length;
+    const activeMemberships = (memberships || []).filter(m => m.status === 'Active').length;
 
-    return { totalIncome, totalExpenses, balance, thisMonthIncome, thisMonthExpense, incomeTrend, monthlyData, activeMemberships };
+    return { 
+      totalIncome: totalIncome || 0, 
+      totalExpenses: totalExpenses || 0, 
+      balance: isNaN(balance) ? 0 : balance, 
+      thisMonthIncome: thisMonthIncome || 0, 
+      thisMonthExpense: thisMonthExpense || 0, 
+      incomeTrend: isNaN(incomeTrend) ? 0 : incomeTrend, 
+      monthlyData, 
+      activeMemberships 
+    };
   }, [transactions, memberships, playerPayments]);
 
   // Player balances from ledger
@@ -1350,8 +1359,8 @@ export default function Finance() {
                               />
                             </div>
                             <div className="space-y-2">
-                                <Label style={{ color: colors.textMuted }}>Account Name</Label>
-                                <Input 
+                              <Label style={{ color: colors.textMuted }}>Account Name</Label>
+                              <Input 
                                 value={settingsForm.account_name || ''} 
                                 onChange={(e) => setSettingsForm({ ...settingsForm, account_name: e.target.value })}
                                 style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}

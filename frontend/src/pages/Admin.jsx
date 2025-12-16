@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import ImageSelector from '../components/admin/ImageSelector';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -24,6 +25,9 @@ import { canManagePlayers, canManageNews, canViewAdmin, getRoleLabel } from '../
 import EventManager from '../components/admin/EventManager';
 import NotificationManager from '../components/admin/NotificationManager';
 import UserManager from '../components/admin/UserManager';
+import PaymentSettingsManager from '../components/admin/PaymentSettingsManager';
+import ImageManager from '../components/admin/ImageManager';
+import ImageSettingsManager from '../components/admin/ImageSettingsManager';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../components/utils';
 import { CLUB_CONFIG, getFinanceTheme } from '@/components/ClubConfig';
@@ -118,12 +122,14 @@ export default function Admin() {
     { key: 'users', label: 'Users', icon: Shield, show: isSuperAdmin },
     { key: 'players', label: 'Players', icon: Users, show: canPlayers },
     { key: 'news', label: 'News', icon: Newspaper, show: canNews },
-    { key: 'gallery', label: 'Gallery', icon: ImageIcon, show: canNews },
+    { key: 'images', label: 'Image Manager', icon: ImageIcon, show: canNews },
+    { key: 'backgrounds', label: 'Page Backgrounds', icon: ImageIcon, show: canNews },
     { key: 'messages', label: 'Messages', icon: MessageSquare, show: true },
     { key: 'events', label: 'Events', icon: PartyPopper, show: true },
     { key: 'notifications', label: 'Notifications', icon: Bell, show: true },
     { key: 'teams', label: 'Teams', icon: Users, show: true },
     { key: 'stats', label: 'Statistics', icon: BarChart3, show: true },
+    { key: 'settings', label: 'Settings', icon: Settings, show: true },
   ].filter(item => item.show);
 
   const renderContent = () => {
@@ -131,12 +137,14 @@ export default function Admin() {
       case 'users': return <UserManager />;
       case 'players': return <PlayersTab queryClient={queryClient} canEdit={canPlayers} />;
       case 'news': return <NewsTab queryClient={queryClient} canEdit={canNews} />;
-      case 'gallery': return <GalleryTab queryClient={queryClient} canEdit={canNews} />;
+      case 'images': return <ImageManager />;
+      case 'backgrounds': return <ImageSettingsManager />;
       case 'messages': return <MessagesTab />;
       case 'events': return <EventManager />;
       case 'notifications': return <NotificationManager />;
       case 'teams': return <TeamsTab />;
       case 'stats': return <StatsTab queryClient={queryClient} />;
+      case 'settings': return <PaymentSettingsManager />;
       default: return null;
     }
   };
@@ -522,10 +530,13 @@ function PlayerForm({ player, onSubmit, isLoading }) {
           <Label>Jersey Number</Label>
           <Input type="number" value={formData.jersey_number} onChange={(e) => setFormData({ ...formData, jersey_number: parseInt(e.target.value) || '' })} />
         </div>
-        <div className="space-y-2">
-          <Label>Photo URL</Label>
-          <Input value={formData.photo_url} onChange={(e) => setFormData({ ...formData, photo_url: e.target.value })} />
-        </div>
+        <ImageSelector
+          folder="players"
+          currentImage={formData.photo_url}
+          onSelect={(path) => setFormData({ ...formData, photo_url: path })}
+          label="Player Photo"
+          aspectRatio="square"
+        />
         <div className="space-y-2">
           <Label>Batting Style</Label>
           <Select value={formData.batting_style} onValueChange={(v) => setFormData({ ...formData, batting_style: v })}>
@@ -718,10 +729,13 @@ function NewsForm({ article, onSubmit, isLoading }) {
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-2">
-          <Label>Image URL</Label>
-          <Input value={formData.image_url} onChange={(e) => setFormData({ ...formData, image_url: e.target.value })} />
-        </div>
+        <ImageSelector
+          folder="ClubNews"
+          currentImage={formData.image_url}
+          onSelect={(path) => setFormData({ ...formData, image_url: path })}
+          label="Article Image"
+          aspectRatio="landscape"
+        />
       </div>
       <div className="space-y-2">
         <Label>Excerpt</Label>
@@ -827,35 +841,11 @@ function GalleryForm({ onSubmit, isLoading }) {
   const [formData, setFormData] = useState({
     title: '', image_url: '', category: 'Team Photos', description: ''
   });
-  const [uploading, setUploading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState('');
-
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    // Show preview
-    const reader = new FileReader();
-    reader.onload = (ev) => setPreviewUrl(ev.target.result);
-    reader.readAsDataURL(file);
-    
-    setUploading(true);
-    try {
-      const { file_url } = await api.integrations.Core.UploadFile({ file });
-      setFormData({ ...formData, image_url: file_url });
-      toast.success('Image uploaded successfully');
-    } catch (error) {
-      toast.error('Failed to upload image');
-      setPreviewUrl('');
-    } finally {
-      setUploading(false);
-    }
-  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.image_url) {
-      toast.error('Please upload an image or provide a URL');
+      toast.error('Please select an image');
       return;
     }
     onSubmit(formData);
@@ -863,53 +853,13 @@ function GalleryForm({ onSubmit, isLoading }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      {/* File Upload */}
-      <div className="space-y-2">
-        <Label>Upload Image</Label>
-        <div className="border-2 border-dashed border-slate-300 rounded-xl p-4 text-center hover:border-[#27567D] transition-colors">
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleFileUpload}
-            className="hidden"
-            id="gallery-upload"
-            disabled={uploading}
-          />
-          <label htmlFor="gallery-upload" className="cursor-pointer block">
-            {uploading ? (
-              <div className="flex items-center justify-center gap-2 py-4">
-                <Loader2 className="w-5 h-5 animate-spin text-[#27567D]" />
-                <span className="text-slate-600">Uploading...</span>
-              </div>
-            ) : previewUrl || formData.image_url ? (
-              <div className="relative">
-                <img 
-                  src={previewUrl || formData.image_url} 
-                  alt="Preview" 
-                  className="max-h-40 mx-auto rounded-lg object-contain"
-                />
-                <p className="text-xs text-slate-500 mt-2">Click to change image</p>
-              </div>
-            ) : (
-              <div className="py-6">
-                <ImageIcon className="w-10 h-10 mx-auto text-slate-400 mb-2" />
-                <p className="text-sm text-slate-600">Click to upload an image</p>
-                <p className="text-xs text-slate-400 mt-1">JPG, PNG, GIF up to 2MB</p>
-              </div>
-            )}
-          </label>
-        </div>
-      </div>
-
-      {/* Or paste URL */}
-      <div className="space-y-2">
-        <Label>Or paste Image URL</Label>
-        <Input 
-          value={formData.image_url} 
-          onChange={(e) => { setFormData({ ...formData, image_url: e.target.value }); setPreviewUrl(''); }}
-          placeholder="https://example.com/image.jpg"
-        />
-      </div>
+      <ImageSelector
+        folder="ClubGallery"
+        currentImage={formData.image_url}
+        onSelect={(path) => setFormData({ ...formData, image_url: path })}
+        label="Gallery Image"
+        aspectRatio="landscape"
+      />
 
       <div className="space-y-2">
         <Label>Title</Label>

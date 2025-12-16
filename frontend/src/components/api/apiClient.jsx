@@ -117,7 +117,7 @@ const createEntityMethods = (entityName) => ({
   filter: async (query, sort = '-created_date', limit = 100) => {
     return request(`/entities/${entityName}/filter`, {
       method: 'POST',
-      body: JSON.stringify({ query, sort, limit }),
+      body: JSON.stringify({ options: { sort, limit } }),
     });
   },
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createPageUrl } from '../utils';
+import { createPageUrl } from '../components/utils';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,8 +35,12 @@ export default function PlayerOnboarding() {
     api.auth.me()
       .then(u => {
         setUser(u);
-        // Pre-fill player name with user's full name
-        setFormData(prev => ({ ...prev, player_name: u.full_name || '' }));
+        // Pre-fill player name with user's full name and immediately set form state
+        setFormData(prev => ({ 
+          ...prev, 
+          player_name: u.full_name || '',
+          // This ensures the field is considered "filled" for validation
+        }));
       })
       .catch(() => {
         navigate(createPageUrl('SignIn'));

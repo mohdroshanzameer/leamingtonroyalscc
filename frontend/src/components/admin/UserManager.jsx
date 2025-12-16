@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription
 } from "@/components/ui/dialog";
-import { Loader2, Search, UserCog, Shield, AlertTriangle } from 'lucide-react';
+import { Loader2, Search, UserCog, Shield, AlertTriangle, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getRoleLabel } from '../RoleAccess';
 import { CLUB_CONFIG } from '../ClubConfig';
@@ -25,12 +25,19 @@ const CLUB_ROLES = [
 export default function UserManager() {
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDialog, setConfirmDialog] = useState({ open: false, user: null, newRole: null });
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, user: null });
+  const [currentUser, setCurrentUser] = useState(null);
   const queryClient = useQueryClient();
   const { colors } = CLUB_CONFIG.theme;
 
+  // Fetch current user to check if super_admin
+  React.useEffect(() => {
+    api.auth.me().then(setCurrentUser).catch(() => setCurrentUser(null));
+  }, []);
+
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['allUsers'],
-    queryFn: () => api.entities.User.list('full_name'),
+    queryFn: () => api.entities.User.list('full_name', 500),
   });
 
   const updateRoleMutation = useMutation({
@@ -42,6 +49,52 @@ export default function UserManager() {
     },
     onError: (error) => {
       toast.error('Failed to update user role');
+      console.error(error);
+    },
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId) => {
+      // Cascade delete related records
+      const players = await api.entities.TeamPlayer.filter({ email: deleteDialog.user.email });
+      
+      for (const player of players) {
+        // Delete player's payments, charges, allocations, memberships, availability
+        await api.entities.PlayerPayment.filter({ player_id: player.id }).then(payments => 
+          Promise.all(payments.map(p => api.entities.PlayerPayment.delete(p.id)))
+        );
+        await api.entities.PlayerCharge.filter({ player_id: player.id }).then(charges => 
+          Promise.all(charges.map(c => api.entities.PlayerCharge.delete(c.id)))
+        );
+        await api.entities.PaymentAllocation.filter({ payment_id: player.id }).then(allocations => 
+          Promise.all(allocations.map(a => api.entities.PaymentAllocation.delete(a.id)))
+        );
+        await api.entities.Membership.filter({ player_id: player.id }).then(memberships => 
+          Promise.all(memberships.map(m => api.entities.Membership.delete(m.id)))
+        );
+        await api.entities.MatchAvailability.filter({ player_id: player.id }).then(avails => 
+          Promise.all(avails.map(a => api.entities.MatchAvailability.delete(a.id)))
+        );
+        
+        // Delete player record
+        await api.entities.TeamPlayer.delete(player.id);
+      }
+      
+      // Delete user notifications
+      await api.entities.UserNotification.filter({ user_id: userId }).then(notifs => 
+        Promise.all(notifs.map(n => api.entities.UserNotification.delete(n.id)))
+      );
+      
+      // Finally delete user
+      await api.entities.User.delete(userId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allUsers'] });
+      toast.success('User and all related data deleted successfully');
+      setDeleteDialog({ open: false, user: null });
+    },
+    onError: (error) => {
+      toast.error('Failed to delete user');
       console.error(error);
     },
   });
@@ -73,6 +126,18 @@ export default function UserManager() {
       });
     }
   };
+
+  const handleDeleteUser = (user) => {
+    setDeleteDialog({ open: true, user });
+  };
+
+  const confirmDeleteUser = () => {
+    if (deleteDialog.user) {
+      deleteUserMutation.mutate(deleteDialog.user.id);
+    }
+  };
+
+  const isSuperAdmin = currentUser?.club_role === 'super_admin';
 
   if (isLoading) {
     return (
@@ -137,6 +202,7 @@ export default function UserManager() {
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textMuted }}>System Role</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textMuted }}>Club Role</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textMuted }}>Assign Role</th>
+                  {isSuperAdmin && <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textMuted }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -193,6 +259,20 @@ export default function UserManager() {
                         </SelectContent>
                       </Select>
                     </td>
+                    {isSuperAdmin && (
+                      <td className="px-4 py-3">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteUser(user)}
+                          disabled={user.id === currentUser?.id}
+                          className="h-8 w-8"
+                          title={user.id === currentUser?.id ? "Cannot delete yourself" : "Delete user"}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -263,6 +343,77 @@ export default function UserManager() {
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
               ) : null}
               Confirm Change
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog.open} onOpenChange={(open) => !open && setDeleteDialog({ open: false, user: null })}>
+        <DialogContent style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" style={{ color: '#f87171' }}>
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+              Delete User - Warning
+            </DialogTitle>
+            <DialogDescription style={{ color: colors.textSecondary }}>
+              This action cannot be undone. All user data will be permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteDialog.user && (
+            <div className="space-y-4 py-4">
+              <div className="flex items-center gap-3 p-3 rounded-lg" style={{ backgroundColor: colors.surfaceHover }}>
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm"
+                  style={{ background: 'linear-gradient(135deg, #f87171 0%, #ef4444 100%)', color: '#fff' }}
+                >
+                  {(deleteDialog.user.full_name || deleteDialog.user.email || '?').charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <p className="font-medium" style={{ color: colors.textPrimary }}>{deleteDialog.user.full_name || 'No Name'}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>{deleteDialog.user.email}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+                <p className="font-semibold text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  The following data will be permanently deleted:
+                </p>
+                <ul className="text-sm text-red-300 space-y-1 ml-6 list-disc">
+                  <li>User account and profile</li>
+                  <li>All player records linked to this email</li>
+                  <li>All payment records</li>
+                  <li>All charge records</li>
+                  <li>All membership records</li>
+                  <li>All match availability records</li>
+                  <li>All user notifications</li>
+                </ul>
+                <p className="text-sm text-red-300 mt-3 font-medium">
+                  This operation cannot be reversed. Are you absolutely sure?
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialog({ open: false, user: null })}
+              style={{ borderColor: colors.border, color: colors.textSecondary }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDeleteUser}
+              disabled={deleteUserMutation.isPending}
+              style={{ backgroundColor: '#ef4444', color: '#fff' }}
+            >
+              {deleteUserMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              ) : null}
+              Delete Permanently
             </Button>
           </DialogFooter>
         </DialogContent>

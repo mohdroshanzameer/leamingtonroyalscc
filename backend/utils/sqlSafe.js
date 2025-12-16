@@ -29,6 +29,7 @@ const ENTITY_TABLE_MAP = {
   Season: "seasons",
   SponsorPayment: "sponsor_payments",
   Sponsor: "sponsors",
+  SponsoTyper: "sponsor_type",
   Team: "teams",
   TeamPlayer: "team_players",
   Tournament: "tournaments",
@@ -62,6 +63,7 @@ const ENTITY_TABLE_MAP = {
   SystemLog: "system_logs",
   UserActivityLog: "user_activity_logs",
   UserNotification: "user_notifications",
+  ImageSetting:"image_settings",
 };
 
 // Build fast lookup by normalized key
