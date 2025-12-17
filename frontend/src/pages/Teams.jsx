@@ -8,11 +8,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { canViewAdmin } from '../components/RoleAccess';
 import { toast } from 'sonner';
+import { getFinanceTheme } from '@/components/ClubConfig';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 import TeamCard from '../components/teams/TeamCard';
 import TeamForm from '../components/teams/TeamForm';
 import TeamDetails from '../components/teams/TeamDetails';
 import PlayerForm from '../components/teams/PlayerForm';
+
+const colors = getFinanceTheme();
 
 export default function Teams() {
   const [user, setUser] = useState(null);
@@ -24,35 +28,33 @@ export default function Teams() {
   const [editingPlayer, setEditingPlayer] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   useEffect(() => {
     api.auth.me()
       .then(setUser)
-      .catch((err) => {
-        if (err?.status === 401 || err?.status === 403) return api.auth.redirectToLogin();
-        console.error('Teams: failed to load current user', err);
-      })
+      .catch(() => api.auth.redirectToLogin())
       .finally(() => setLoading(false));
   }, []);
 
   // Fetch teams
   const { data: teams = [], isLoading: teamsLoading } = useQuery({
     queryKey: ['teams'],
-    queryFn: () => api.entities.Team.list('name'),
+    queryFn: () => api.entities.Team.list('name', 100),
     staleTime: 0,
   });
 
   // Fetch all team players
   const { data: allPlayers = [] } = useQuery({
     queryKey: ['allTeamPlayers'],
-    queryFn: () => api.entities.TeamPlayer.list('player_name'),
+    queryFn: () => api.entities.TeamPlayer.list('player_name', 500),
   });
 
   // Fetch matches for stats
   const { data: matches = [] } = useQuery({
     queryKey: ['teamMatches'],
-    queryFn: () => api.entities.TournamentMatch.list('-match_date'),
+    queryFn: () => api.entities.TournamentMatch.list('-match_date', 300),
   });
 
   // Get players for selected team
@@ -153,28 +155,41 @@ export default function Teams() {
     }
   };
 
-  const handleDeleteTeam = async () => {
+  const handleDeleteTeam = () => {
     if (!selectedTeam) return;
-    if (confirm('Are you sure you want to delete this team? All players will be removed.')) {
-      // Delete players first, then team
-      for (const p of selectedTeamPlayers) {
-        await api.entities.TeamPlayer.delete(p.id);
-      }
-      deleteTeamMutation.mutate(selectedTeam.id);
-    }
+    const playerCount = selectedTeamPlayers.length;
+    setConfirmDialog({
+      open: true,
+      title: 'Delete Team',
+      message: `Are you sure you want to delete "${selectedTeam.name}"?${playerCount > 0 ? ` All ${playerCount} player(s) will also be removed.` : ''} This action cannot be undone.`,
+      onConfirm: async () => {
+        // Delete players first, then team
+        for (const p of selectedTeamPlayers) {
+          await api.entities.TeamPlayer.delete(p.id);
+        }
+        deleteTeamMutation.mutate(selectedTeam.id);
+      },
+      confirmText: 'Delete Team',
+      variant: 'danger'
+    });
   };
 
   const handleDeletePlayer = (player) => {
-    if (confirm(`Remove ${player.player_name} from the team?`)) {
-      deletePlayerMutation.mutate(player.id);
-    }
+    setConfirmDialog({
+      open: true,
+      title: 'Remove Player',
+      message: `Are you sure you want to remove ${player.player_name} from ${selectedTeam?.name || 'the team'}? All player stats and records will be removed. This action cannot be undone.`,
+      onConfirm: () => deletePlayerMutation.mutate(player.id),
+      confirmText: 'Remove Player',
+      variant: 'danger'
+    });
   };
 
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-[#27567D]" />
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: colors.background }}>
+        <Loader2 className="w-8 h-8 animate-spin" style={{ color: colors.accent }} />
       </div>
     );
   }
@@ -182,12 +197,12 @@ export default function Teams() {
   // Auth check
   if (!user || !canViewAdmin(user)) {
     return (
-      <div className="min-h-screen flex items-center justify-center pt-20">
-        <Card className="max-w-md">
+      <div className="min-h-screen flex items-center justify-center pt-20" style={{ backgroundColor: colors.background }}>
+        <Card className="max-w-md" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
           <CardContent className="p-8 text-center">
-            <Shield className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold mb-2">Access Denied</h2>
-            <p className="text-slate-500">Only admins can manage teams.</p>
+            <Shield className="w-12 h-12 mx-auto mb-4" style={{ color: colors.textMuted }} />
+            <h2 className="text-xl font-semibold mb-2" style={{ color: colors.textPrimary }}>Access Denied</h2>
+            <p style={{ color: colors.textMuted }}>Only admins can manage teams.</p>
           </CardContent>
         </Card>
       </div>
@@ -195,7 +210,7 @@ export default function Teams() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 pt-24 pb-8">
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {selectedTeam ? (
@@ -215,12 +230,13 @@ export default function Teams() {
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
               <div>
-                <h1 className="text-3xl font-bold text-slate-800">Team Management</h1>
-                <p className="text-slate-600">Manage your teams, rosters, and players</p>
+                <h1 className="text-3xl font-bold" style={{ color: colors.textPrimary }}>Team Management</h1>
+                <p style={{ color: colors.textSecondary }}>Manage your teams, rosters, and players</p>
               </div>
               <Button 
                 onClick={() => { setEditingTeam(null); setShowTeamForm(true); }}
-                className="bg-[#27567D] hover:bg-[#5D82A2]"
+                style={{ background: colors.gradientProfit }}
+                className="text-white font-semibold"
               >
                 <Plus className="w-4 h-4 mr-2" /> Create Team
               </Button>
@@ -228,34 +244,34 @@ export default function Teams() {
 
             {/* Stats Summary */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-              <Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
                 <CardContent className="p-4 text-center">
-                  <p className="text-3xl font-bold text-[#27567D]">{teams.length}</p>
-                  <p className="text-sm text-slate-500">Total Teams</p>
+                  <p className="text-3xl font-bold" style={{ color: colors.info }}>{teams.length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Total Teams</p>
                 </CardContent>
               </Card>
-              <Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
                 <CardContent className="p-4 text-center">
-                  <p className="text-3xl font-bold text-green-600">{teams.filter(t => t.status === 'Active' || !t.status).length}</p>
-                  <p className="text-sm text-slate-500">Active Teams</p>
+                  <p className="text-3xl font-bold" style={{ color: colors.profit }}>{teams.filter(t => t.status === 'Active' || !t.status).length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Active Teams</p>
                 </CardContent>
               </Card>
-              <Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
                 <CardContent className="p-4 text-center">
-                  <p className="text-3xl font-bold text-blue-600">{allPlayers.length}</p>
-                  <p className="text-sm text-slate-500">Total Players</p>
+                  <p className="text-3xl font-bold" style={{ color: colors.chart2 }}>{allPlayers.length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Total Players</p>
                 </CardContent>
               </Card>
-              <Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
                 <CardContent className="p-4 text-center">
-                  <p className="text-3xl font-bold text-amber-600">{teams.filter(t => t.is_home_team).length}</p>
-                  <p className="text-sm text-slate-500">Home Teams</p>
+                  <p className="text-3xl font-bold" style={{ color: colors.pending }}>{teams.filter(t => t.is_home_team).length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Home Teams</p>
                 </CardContent>
               </Card>
             </div>
 
             {/* Filters */}
-            <Card className="mb-6">
+            <Card className="mb-6" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
               <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row gap-4">
                   <div className="relative flex-1">
@@ -286,7 +302,7 @@ export default function Teams() {
             {/* Teams Grid */}
             {teamsLoading ? (
               <div className="text-center py-12">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#27567D]" />
+                <Loader2 className="w-8 h-8 animate-spin mx-auto" style={{ color: colors.accent }} />
               </div>
             ) : filteredTeams.length > 0 ? (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -303,17 +319,17 @@ export default function Teams() {
                 ))}
               </div>
             ) : (
-              <Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
                 <CardContent className="py-16 text-center">
-                  <Users className="w-16 h-16 mx-auto mb-4 text-slate-300" />
-                  <h3 className="text-lg font-semibold text-slate-700 mb-2">No teams found</h3>
-                  <p className="text-slate-500 mb-4">
+                  <Users className="w-16 h-16 mx-auto mb-4" style={{ color: colors.textMuted }} />
+                  <h3 className="text-lg font-semibold mb-2" style={{ color: colors.textSecondary }}>No teams found</h3>
+                  <p className="mb-4" style={{ color: colors.textMuted }}>
                     {searchQuery || statusFilter !== 'all' 
                       ? 'Try adjusting your filters'
                       : 'Get started by creating your first team'}
                   </p>
                   {!searchQuery && statusFilter === 'all' && (
-                    <Button onClick={() => setShowTeamForm(true)} className="bg-[#27567D] hover:bg-[#5D82A2]">
+                    <Button onClick={() => setShowTeamForm(true)} style={{ background: colors.gradientProfit }} className="text-white font-semibold">
                       <Plus className="w-4 h-4 mr-2" /> Create Team
                     </Button>
                   )}
@@ -341,6 +357,17 @@ export default function Teams() {
           teamName={selectedTeam?.name}
           onSave={handleSavePlayer}
           isLoading={createPlayerMutation.isPending || updatePlayerMutation.isPending}
+        />
+
+        {/* Confirmation Dialog */}
+        <ConfirmDialog
+          open={confirmDialog.open}
+          onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText={confirmDialog.confirmText || 'Confirm'}
+          onConfirm={confirmDialog.onConfirm}
+          variant={confirmDialog.variant || 'danger'}
         />
       </div>
     </div>
