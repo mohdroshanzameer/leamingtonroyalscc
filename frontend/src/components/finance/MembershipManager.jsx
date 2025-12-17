@@ -13,12 +13,14 @@ import { Plus, Edit, Trash2, Loader2, Save, Users, UserCheck, UserX, Clock } fro
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { getFinanceTheme } from '@/components/ClubConfig';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 
 const colors = getFinanceTheme();
 
 export default function MembershipManager() {
   const [editingMember, setEditingMember] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   const { data: memberships, isLoading } = useQuery({
@@ -196,7 +198,16 @@ export default function MembershipManager() {
                           <Button variant="ghost" size="sm" onClick={() => { setEditingMember(member); setIsDialogOpen(true); }} style={{ color: colors.textSecondary }}>
                             <Edit className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => deleteMutation.mutate(member.id)}>
+                          <Button variant="ghost" size="sm" onClick={() => {
+                            setConfirmDialog({
+                              open: true,
+                              title: 'Delete Membership',
+                              message: `Are you sure you want to delete the membership record for ${member.member_name}? This action cannot be undone.`,
+                              onConfirm: () => deleteMutation.mutate(member.id),
+                              confirmText: 'Delete Membership',
+                              variant: 'danger'
+                            });
+                          }}>
                             <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
                           </Button>
                         </div>
@@ -209,6 +220,17 @@ export default function MembershipManager() {
           )}
         </CardContent>
       </Card>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }
