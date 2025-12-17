@@ -19,6 +19,7 @@ import { formatCurrency, getFinanceTheme } from '@/components/ClubConfig';
 import { extractReferencesFromText } from '../payments/PaymentUtils';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '../../utils';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 
 const colors = getFinanceTheme();
 
@@ -28,6 +29,7 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
   const [uploadingStatement, setUploadingStatement] = useState(false);
   const [matchedReferences, setMatchedReferences] = useState([]);
   const [selectedMatch, setSelectedMatch] = useState('all');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   const { data: payments = [], isLoading } = useQuery({
@@ -575,7 +577,16 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
                             size="sm" 
                             variant="outline"
                             className="h-8 w-8 p-0"
-                            onClick={() => rejectPaymentMutation.mutate(payment.id)}
+                            onClick={() => {
+                              setConfirmDialog({
+                                open: true,
+                                title: 'Reject Payment',
+                                message: `Are you sure you want to reject the payment of £${(parseFloat(payment.amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2 })} from ${getPlayerName(payment.player_id)}? All allocations will be removed. This action cannot be undone.`,
+                                onConfirm: () => rejectPaymentMutation.mutate(payment.id),
+                                confirmText: 'Reject Payment',
+                                variant: 'danger'
+                              });
+                            }}
                             style={{ borderColor: colors.loss, color: colors.loss }}
                           >
                             <XCircle className="w-4 h-4" />
@@ -685,7 +696,18 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
             </Button>
           </div>
         </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+        </Dialog>
+
+        {/* Confirmation Dialog */}
+        <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+        />
+        </div>
+        );
+        }
