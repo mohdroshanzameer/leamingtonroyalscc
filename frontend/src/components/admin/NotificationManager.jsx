@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 
 const typeIcons = {
   Event: Calendar,
@@ -37,23 +38,24 @@ export default function NotificationManager() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingNotification, setEditingNotification] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   const { data: notifications, isLoading } = useQuery({
     queryKey: ['adminNotifications'],
-    queryFn: () => api.entities.Notification.list('-created_date'),
+    queryFn: () => api.entities.Notification.list('-created_date', 200),
     initialData: [],
   });
 
   const { data: userNotifications } = useQuery({
     queryKey: ['allUserNotifications'],
-    queryFn: () => api.entities.UserNotification.list(),
+    queryFn: () => api.entities.UserNotification.list('-created_date', 1000),
     initialData: [],
   });
 
   const { data: users } = useQuery({
     queryKey: ['allUsers'],
-    queryFn: () => api.entities.User.list(),
+    queryFn: () => api.entities.User.list('full_name', 500),
     initialData: [],
   });
 
@@ -244,7 +246,16 @@ export default function NotificationManager() {
                               variant="ghost"
                               size="icon"
                               className="text-red-600"
-                              onClick={() => { if (confirm('Delete?')) deleteMutation.mutate(notification.id); }}
+                              onClick={() => {
+                                setConfirmDialog({
+                                  open: true,
+                                  title: 'Delete Notification',
+                                  message: `Are you sure you want to delete the notification "${notification.title}"? This action cannot be undone.`,
+                                  onConfirm: () => deleteMutation.mutate(notification.id),
+                                  confirmText: 'Delete Notification',
+                                  variant: 'danger'
+                                });
+                              }}
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
@@ -273,6 +284,17 @@ export default function NotificationManager() {
           )}
         </CardContent>
       </Card>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }
