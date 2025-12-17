@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom';
 import { createPageUrl } from '../components/utils';
 import { formatCurrency, getFinanceTheme } from '../components/ClubConfig';
 import { canViewFinance, canManageFinance } from '../components/RoleAccess';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 const colors = getFinanceTheme();
 
@@ -25,6 +26,7 @@ export default function ClubPayments() {
   const [showForm, setShowForm] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const [formData, setFormData] = useState({
     category_id: '',
     category_name: '',
@@ -42,10 +44,7 @@ export default function ClubPayments() {
   React.useEffect(() => {
     api.auth.me()
       .then(u => setUser(u))
-      .catch((err) => {
-        if (err?.status === 401 || err?.status === 403) return api.auth.redirectToLogin();
-        console.error('ClubPayments: failed to load current user', err);
-      })
+      .catch(() => api.auth.redirectToLogin())
       .finally(() => setLoading(false));
   }, []);
 
@@ -258,7 +257,16 @@ export default function ClubPayments() {
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(payment)}>
                             <Pencil className="w-4 h-4" style={{ color: colors.textSecondary }} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deleteMutation.mutate(payment.id)}>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
+                            setConfirmDialog({
+                              open: true,
+                              title: 'Delete Payment',
+                              message: `Are you sure you want to delete the payment of ${formatCurrency(payment.amount)} for "${payment.description}"? This action cannot be undone.`,
+                              onConfirm: () => deleteMutation.mutate(payment.id),
+                              confirmText: 'Delete Payment',
+                              variant: 'danger'
+                            });
+                          }}>
                             <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
                           </Button>
                         </div>
@@ -374,6 +382,17 @@ export default function ClubPayments() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Confirmation Dialog */}
+        <ConfirmDialog
+          open={confirmDialog.open}
+          onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText={confirmDialog.confirmText || 'Confirm'}
+          onConfirm={confirmDialog.onConfirm}
+          variant={confirmDialog.variant || 'danger'}
+        />
       </div>
     </div>
   );
