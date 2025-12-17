@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, Plus, X, Search, UserPlus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 
 export default function TournamentTeams({ tournament, teams }) {
   const [showAddTeam, setShowAddTeam] = useState(false);
@@ -21,19 +22,20 @@ export default function TournamentTeams({ tournament, teams }) {
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerRole, setNewPlayerRole] = useState('Batsman');
   const [selectedPlayerId, setSelectedPlayerId] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   
   const queryClient = useQueryClient();
 
   const { data: players = [], refetch: refetchPlayers } = useQuery({
     queryKey: ['tournamentPlayers', tournament.id],
-    queryFn: () => api.entities.TournamentPlayer.filter({ tournament_id: tournament.id }),
+    queryFn: () => api.entities.TournamentPlayer.filter({ tournament_id: tournament.id }, 'player_name', 500),
     enabled: !!tournament.id,
   });
 
   // Fetch all TeamPlayers for dropdown
   const { data: allTeamPlayers = [] } = useQuery({
     queryKey: ['allTeamPlayers'],
-    queryFn: () => api.entities.TeamPlayer.list('player_name'),
+    queryFn: () => api.entities.TeamPlayer.list('player_name', 500),
   });
 
   const addTeamMutation = useMutation({
@@ -224,7 +226,27 @@ export default function TournamentTeams({ tournament, teams }) {
                   <p className="text-slate-500 text-sm py-4 text-center">No teams in this group</p>
                 ) : (
                   filteredTeams.filter(t => t.group === group).map(team => (
-                    <TeamCard key={team.id} team={team} players={getTeamPlayers(team.id)} onAddPlayer={() => setShowAddPlayer(team)} onDelete={() => deleteTeamMutation.mutate(team.id)} onDeletePlayer={(id) => deletePlayerMutation.mutate(id)} canEdit={tournament.status !== 'completed'} />
+                    <TeamCard key={team.id} team={team} players={getTeamPlayers(team.id)} onAddPlayer={() => setShowAddPlayer(team)} onDelete={() => {
+                      const playerCount = getTeamPlayers(team.id).length;
+                      setConfirmDialog({
+                        open: true,
+                        title: 'Delete Team',
+                        message: `Are you sure you want to delete "${team.team_name}" from the tournament?${playerCount > 0 ? ` All ${playerCount} player(s) and associated matches will be removed.` : ''} This action cannot be undone.`,
+                        onConfirm: () => deleteTeamMutation.mutate(team.id),
+                        confirmText: 'Delete Team',
+                        variant: 'danger'
+                      });
+                    }} onDeletePlayer={(id) => {
+                      const player = players.find(p => p.id === id);
+                      setConfirmDialog({
+                        open: true,
+                        title: 'Remove Player',
+                        message: `Are you sure you want to remove ${player?.player_name || 'this player'} from ${team.team_name}? This action cannot be undone.`,
+                        onConfirm: () => deletePlayerMutation.mutate(id),
+                        confirmText: 'Remove Player',
+                        variant: 'danger'
+                      });
+                    }} canEdit={tournament.status !== 'completed'} />
                   ))
                 )}
               </CardContent>
@@ -241,7 +263,27 @@ export default function TournamentTeams({ tournament, teams }) {
             </Card>
           ) : (
             filteredTeams.map(team => (
-              <TeamCard key={team.id} team={team} players={getTeamPlayers(team.id)} onAddPlayer={() => setShowAddPlayer(team)} onDelete={() => deleteTeamMutation.mutate(team.id)} onDeletePlayer={(id) => deletePlayerMutation.mutate(id)} canEdit={tournament.status !== 'completed'} />
+              <TeamCard key={team.id} team={team} players={getTeamPlayers(team.id)} onAddPlayer={() => setShowAddPlayer(team)} onDelete={() => {
+                const playerCount = getTeamPlayers(team.id).length;
+                setConfirmDialog({
+                  open: true,
+                  title: 'Delete Team',
+                  message: `Are you sure you want to delete "${team.team_name}" from the tournament?${playerCount > 0 ? ` All ${playerCount} player(s) and associated matches will be removed.` : ''} This action cannot be undone.`,
+                  onConfirm: () => deleteTeamMutation.mutate(team.id),
+                  confirmText: 'Delete Team',
+                  variant: 'danger'
+                });
+              }} onDeletePlayer={(id) => {
+                const player = players.find(p => p.id === id);
+                setConfirmDialog({
+                  open: true,
+                  title: 'Remove Player',
+                  message: `Are you sure you want to remove ${player?.player_name || 'this player'}? This action cannot be undone.`,
+                  onConfirm: () => deletePlayerMutation.mutate(id),
+                  confirmText: 'Remove Player',
+                  variant: 'danger'
+                });
+              }} canEdit={tournament.status !== 'completed'} />
             ))
           )}
         </div>
@@ -329,6 +371,17 @@ export default function TournamentTeams({ tournament, teams }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }
