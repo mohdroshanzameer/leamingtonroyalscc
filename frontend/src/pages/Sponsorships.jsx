@@ -20,7 +20,7 @@ import { format, parseISO, isAfter, isBefore, addDays } from 'date-fns';
 import { CLUB_CONFIG, getFinanceTheme } from '@/components/ClubConfig';
 import { canViewFinance, canManageFinance } from '@/components/RoleAccess';
 import ImageSelector from '../components/admin/ImageSelector';
-import { formatCurrency } from '../utils/formatters';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 const colors = getFinanceTheme();
 
@@ -36,6 +36,11 @@ const getLevelConfig = (typeName, sponsorTypes) => {
   return { color: colors.textSecondary, bg: colors.surfaceHover, amount: 0 };
 };
 
+const formatCurrency = (v) => {
+  const num = parseFloat(v) || 0;
+  return `£${num.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+};
+
 export default function Sponsorships() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +50,7 @@ export default function Sponsorships() {
   const [editingSponsor, setEditingSponsor] = useState(null);
   const [selectedSponsor, setSelectedSponsor] = useState(null);
   const [editingPayment, setEditingPayment] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -56,12 +62,18 @@ export default function Sponsorships() {
 
   const { data: sponsors = [], isLoading: sponsorsLoading } = useQuery({
     queryKey: ['sponsors'],
-    queryFn: () => api.entities.Sponsor.list('-created_date'),
+    queryFn: async () => {
+      const allSponsors = await api.entities.Sponsor.list('-created_date');
+      return allSponsors.filter(s => !s.is_deleted);
+    },
   });
 
   const { data: payments = [] } = useQuery({
     queryKey: ['sponsorPayments'],
-    queryFn: () => api.entities.SponsorPayment.list('-payment_date'),
+    queryFn: async () => {
+      const allPayments = await api.entities.SponsorPayment.list('-payment_date');
+      return allPayments.filter(p => !p.is_deleted);
+    },
   });
 
   const { data: seasons = [] } = useQuery({
@@ -105,25 +117,62 @@ export default function Sponsorships() {
   });
 
   const deleteSponsorMutation = useMutation({
-    mutationFn: (id) => api.entities.Sponsor.delete(id),
+    mutationFn: async (id) => {
+      // Soft delete sponsor
+      const currentUser = await api.auth.me().catch(() => null);
+      await api.entities.Sponsor.update(id, {
+        is_deleted: true,
+        deleted_at: new Date().toISOString(),
+        deleted_by: currentUser?.email || 'unknown'
+      });
+      
+      // Soft delete all payments for this sponsor
+      const sponsorPayments = payments.filter(p => p.sponsor_id === id);
+      for (const payment of sponsorPayments) {
+        await api.entities.SponsorPayment.update(payment.id, {
+          is_deleted: true,
+          deleted_at: new Date().toISOString(),
+          deleted_by: currentUser?.email || 'unknown'
+        });
+        
+        // Also soft delete the corresponding transaction
+        const allTransactions = await api.entities.Transaction.filter({ 
+          category_name: 'Sponsorship'
+        });
+        const matchingTx = allTransactions.find(tx => 
+          !tx.is_deleted && tx.reference?.includes(`[SP:${payment.id}]`)
+        );
+        if (matchingTx) {
+          await api.entities.Transaction.update(matchingTx.id, {
+            is_deleted: true,
+            deleted_at: new Date().toISOString(),
+            deleted_by: currentUser?.email || 'unknown'
+          });
+        }
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sponsors'] });
+      queryClient.invalidateQueries({ queryKey: ['sponsorPayments'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
       toast.success('Sponsor deleted');
     },
   });
 
   const createPaymentMutation = useMutation({
-    mutationFn: async (data) => {
-      // Clean data: remove empty strings for UUID fields
-      const cleanData = { ...data };
-      if (cleanData.season_id === '') delete cleanData.season_id;
-      if (cleanData.competition_id === '') delete cleanData.competition_id;
-      if (cleanData.team_id === '') delete cleanData.team_id;
+      mutationFn: async (data) => {
+        // Clean data: remove empty strings for UUID fields and agreed_amount
+        const cleanData = { ...data };
+        delete cleanData.agreed_amount; // No longer stored
+        if (cleanData.season_id === '') delete cleanData.season_id;
+        if (cleanData.competition_id === '') delete cleanData.competition_id;
+        if (cleanData.team_id === '') delete cleanData.team_id;
 
-      const payment = await api.entities.SponsorPayment.create(cleanData);
+        const payment = await api.entities.SponsorPayment.create(cleanData);
 
       // Create Transaction for Finance page ledger with reference to payment
       const sponsor = sponsors.find(s => s.id === data.sponsor_id);
+      const currentUser = await api.auth.me().catch(() => null);
       if (sponsor) {
         await api.entities.Transaction.create({
           type: 'Income',
@@ -131,11 +180,12 @@ export default function Sponsorships() {
           amount: data.amount,
           description: `Sponsorship - ${sponsor.name} (${data.sponsor_type})`,
           date: data.payment_date,
-          reference: data.reference || `SP-${payment.id}`, // Link to SponsorPayment
+          reference: `${data.reference || 'No-Ref'} [SP:${payment.id}]`, // Always include payment ID for tracking
           received_from: sponsor.name,
           payment_method: data.payment_method,
           status: 'Completed',
-          notes: data.notes
+          notes: data.notes,
+          created_by: currentUser?.email || 'unknown'
         });
       }
     },
@@ -150,22 +200,29 @@ export default function Sponsorships() {
   });
 
   const updatePaymentMutation = useMutation({
-    mutationFn: async ({ id, data }) => {
+      mutationFn: async ({ id, data }) => {
+        // Clean data: remove empty strings for UUID fields and agreed_amount
+        const cleanData = { ...data };
+        delete cleanData.agreed_amount; // No longer stored
+        if (cleanData.season_id === '') delete cleanData.season_id;
+        if (cleanData.competition_id === '') delete cleanData.competition_id;
+        if (cleanData.team_id === '') delete cleanData.team_id;
+
       // Update SponsorPayment
-      await api.entities.SponsorPayment.update(id, data);
+      await api.entities.SponsorPayment.update(id, cleanData);
 
       // Update corresponding Transaction
       const transactions = await api.entities.Transaction.filter({ 
         category_name: 'Sponsorship' 
       });
-      const matchingTx = transactions.find(tx => tx.reference?.includes(id));
+      const matchingTx = transactions.find(tx => tx.reference?.includes(`[SP:${id}]`));
       if (matchingTx) {
         const sponsor = sponsors.find(s => s.id === data.sponsor_id);
         await api.entities.Transaction.update(matchingTx.id, {
           amount: data.amount,
           description: `Sponsorship - ${sponsor?.name || data.sponsor_name} (${data.sponsor_type})`,
           date: data.payment_date,
-          reference: data.reference || `SP-${id}`,
+          reference: `${data.reference || 'No-Ref'} [SP:${id}]`,
           received_from: sponsor?.name || data.sponsor_name,
           payment_method: data.payment_method,
           notes: data.notes
@@ -186,12 +243,14 @@ export default function Sponsorships() {
       // Delete SponsorPayment
       await api.entities.SponsorPayment.delete(paymentId);
 
-      // Soft delete corresponding Transaction (matched by reference containing payment ID)
-      const transactions = await api.entities.Transaction.filter({ 
-        category_name: 'Sponsorship',
-        is_deleted: false
+      // Soft delete corresponding Transaction (matched by payment ID in reference)
+      const allTransactions = await api.entities.Transaction.filter({ 
+        category_name: 'Sponsorship'
       });
-      const matchingTx = transactions.find(tx => tx.reference?.includes(paymentId));
+      // Find transaction that's not already deleted and has this payment ID
+      const matchingTx = allTransactions.find(tx => 
+        !tx.is_deleted && tx.reference?.includes(`[SP:${paymentId}]`)
+      );
       if (matchingTx) {
         const currentUser = await api.auth.me().catch(() => null);
         await api.entities.Transaction.update(matchingTx.id, {
@@ -211,21 +270,36 @@ export default function Sponsorships() {
   // Stats
   const stats = useMemo(() => {
     const activeSponsorIds = new Set(payments.map(p => p.sponsor_id));
-    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
     const currentSeason = seasons.find(s => s.status === 'Active');
-    const thisSeasonPayments = payments.filter(p => p.season_id === currentSeason?.id);
-    const thisSeasonAgreed = thisSeasonPayments.reduce((sum, p) => sum + (parseFloat(p.agreed_amount) || 0), 0);
-    const thisSeasonPaid = thisSeasonPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
-    const outstanding = thisSeasonAgreed - thisSeasonPaid;
+    const thisSeasonPayments = currentSeason 
+      ? payments.filter(p => p.season_id === currentSeason.id)
+      : [];
+
+    // Calculate expected: count unique sponsorship deals (one per sponsor+type+level combo per season)
+    const uniqueDeals = new Map();
+    thisSeasonPayments.forEach(p => {
+      const key = `${p.sponsor_id}-${p.sponsor_type}-${p.sponsorship_level}-${p.competition_id || 'none'}-${p.team_id || 'none'}`;
+      if (!uniqueDeals.has(key)) {
+        uniqueDeals.set(key, p);
+      }
+    });
+
+    const thisSeasonExpected = Array.from(uniqueDeals.values()).reduce((sum, p) => {
+      const type = sponsorTypes.find(t => t.name === p.sponsor_type);
+      return sum + (parseFloat(type?.suggested_amount) || 0);
+    }, 0);
+
+    const thisSeasonReceived = thisSeasonPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const outstanding = Math.max(0, thisSeasonExpected - thisSeasonReceived);
     
     return { 
       active: activeSponsorIds.size, 
-      totalValue: thisSeasonAgreed,
-      totalPaid, 
-      outstanding: Math.max(0, outstanding), 
+      totalValue: thisSeasonExpected,
+      totalPaid: thisSeasonReceived, 
+      outstanding, 
       expiringSoon: 0 
     };
-  }, [sponsors, payments, seasons]);
+  }, [payments, seasons, sponsorTypes]);
 
   const sendInvoice = async (sponsor) => {
     if (!sponsor.email) {
@@ -374,34 +448,32 @@ ${CLUB_CONFIG.name}
         </div>
 
         {/* Sponsors Grid */}
-        <Tabs defaultValue="active" className="space-y-4">
+        <Tabs defaultValue="all" className="space-y-4">
           <TabsList style={{ backgroundColor: colors.surface }}>
-            <TabsTrigger value="active">Active</TabsTrigger>
             <TabsTrigger value="all">All Sponsors</TabsTrigger>
             <TabsTrigger value="payments">Payments</TabsTrigger>
           </TabsList>
-
-          <TabsContent value="active">
-            <SponsorGrid 
-              sponsors={sponsors.filter(s => {
-                const hasRecentPayments = payments.some(p => p.sponsor_id === s.id);
-                return hasRecentPayments;
-              })}
-              payments={payments}
-              onEdit={(s) => { setEditingSponsor(s); setShowSponsorDialog(true); }}
-              onDelete={(id) => deleteSponsorMutation.mutate(id)}
-              onSendInvoice={sendInvoice}
-              onRecordPayment={(s) => { setSelectedSponsor(s); setShowPaymentDialog(true); }}
-              canManage={canManageFinance(user)}
-            />
-          </TabsContent>
 
           <TabsContent value="all">
             <SponsorGrid 
               sponsors={sponsors}
               payments={payments}
               onEdit={(s) => { setEditingSponsor(s); setShowSponsorDialog(true); }}
-              onDelete={(id) => deleteSponsorMutation.mutate(id)}
+              onDelete={(id) => {
+                const sponsor = sponsors.find(s => s.id === id);
+                const paymentCount = payments.filter(p => p.sponsor_id === id).length;
+                const message = paymentCount > 0 
+                  ? `This will permanently delete the sponsor "${sponsor?.name}" and soft delete ${paymentCount} associated payment record(s). This action cannot be undone.`
+                  : `This will permanently delete the sponsor "${sponsor?.name}". This action cannot be undone.`;
+                setConfirmDialog({
+                  open: true,
+                  title: 'Delete Sponsor',
+                  message,
+                  onConfirm: () => deleteSponsorMutation.mutate(id),
+                  confirmText: 'Delete Sponsor',
+                  variant: 'danger'
+                });
+              }}
               onSendInvoice={sendInvoice}
               onRecordPayment={(s) => { setSelectedSponsor(s); setShowPaymentDialog(true); }}
               canManage={canManageFinance(user)}
@@ -419,9 +491,15 @@ ${CLUB_CONFIG.name}
                 setShowPaymentDialog(true);
               }}
               onDelete={(id) => {
-                if (confirm('Delete this payment? This will also remove it from the finance ledger.')) {
-                  deletePaymentMutation.mutate(id);
-                }
+                const payment = payments.find(p => p.id === id);
+                setConfirmDialog({
+                  open: true,
+                  title: 'Delete Payment',
+                  message: `This will delete the payment of £${payment?.amount?.toLocaleString() || 0} and remove it from the finance ledger. This action cannot be undone.`,
+                  onConfirm: () => deletePaymentMutation.mutate(id),
+                  confirmText: 'Delete Payment',
+                  variant: 'danger'
+                });
               }}
               canManage={canManageFinance(user)}
             />
@@ -493,14 +571,25 @@ ${CLUB_CONFIG.name}
           <DialogHeader>
             <DialogTitle style={{ color: colors.textPrimary }}>Manage Sponsor Types</DialogTitle>
           </DialogHeader>
-          <SponsorTypesManager />
+          <SponsorTypesManager onShowConfirm={setConfirmDialog} />
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }
 
-function SponsorTypesManager() {
+function SponsorTypesManager({ onShowConfirm }) {
   const queryClient = useQueryClient();
   const [editingType, setEditingType] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -608,9 +697,14 @@ function SponsorTypesManager() {
                   variant="ghost" 
                   size="sm" 
                   onClick={() => {
-                    if (confirm('Delete this sponsor type?')) {
-                      deleteTypeMutation.mutate(type.id);
-                    }
+                    onShowConfirm({
+                      open: true,
+                      title: 'Delete Sponsor Type',
+                      message: `This will delete the "${type.name}" sponsor type. Any existing sponsorships using this type will remain unchanged.`,
+                      onConfirm: () => deleteTypeMutation.mutate(type.id),
+                      confirmText: 'Delete Type',
+                      variant: 'danger'
+                    });
                   }}
                 >
                   <Trash2 className="w-4 h-4" style={{ color: colors.loss }} />
@@ -718,7 +812,21 @@ function SponsorGrid({ sponsors, payments, onEdit, onDelete, onSendInvoice, onRe
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {sponsors.map(sponsor => {
       const sponsorPayments = payments.filter(p => p.sponsor_id === sponsor.id);
-      const totalPaid = sponsorPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+          const totalPaid = sponsorPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+
+          // Calculate total agreed: count unique sponsorships and sum their suggested amounts
+          const uniqueDeals = new Map();
+          sponsorPayments.forEach(p => {
+            const key = `${p.season_id || 'none'}-${p.sponsor_type}-${p.sponsorship_level}-${p.competition_id || ''}-${p.team_id || ''}`;
+            if (!uniqueDeals.has(key)) {
+              uniqueDeals.set(key, p);
+            }
+          });
+
+          const totalAgreed = Array.from(uniqueDeals.values()).reduce((sum, p) => {
+            const type = sponsorTypes.find(t => t.name === p.sponsor_type);
+            return sum + (type?.suggested_amount || 0);
+          }, 0);
       const latestPayment = sponsorPayments[0]; // Most recent payment
       const levelConfig = latestPayment ? getLevelConfig(latestPayment.sponsor_type, sponsorTypes) : { color: colors.textSecondary, bg: colors.surfaceHover, amount: 0 };
 
@@ -770,12 +878,12 @@ function SponsorGrid({ sponsors, payments, onEdit, onDelete, onSendInvoice, onRe
               <div className="flex justify-between text-sm">
                 <span style={{ color: colors.textMuted }}>Total Agreed</span>
                 <span className="font-semibold" style={{ color: colors.textSecondary }}>
-                  {formatCurrency(sponsorPayments.reduce((sum, p) => sum + (parseFloat(p.agreed_amount) || 0), 0))}
+                  £{parseFloat(totalAgreed || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span style={{ color: colors.textMuted }}>Total Paid</span>
-                <span className="font-semibold" style={{ color: colors.textProfit }}>{formatCurrency(totalPaid)}</span>
+                <span className="font-semibold" style={{ color: colors.textProfit }}>£{(parseFloat(totalPaid) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span style={{ color: colors.textMuted }}>Payments</span>
@@ -893,19 +1001,21 @@ function SponsorForm({ sponsor, seasons, competitions, teams, onSubmit, isLoadin
         
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label style={{ color: colors.textSecondary }}>Contact Name</Label>
+            <Label style={{ color: colors.textSecondary }}>Contact Name *</Label>
             <Input 
               value={formData.contact_name} 
               onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
               style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+              required
             />
           </div>
           <div>
-            <Label style={{ color: colors.textSecondary }}>Phone</Label>
+            <Label style={{ color: colors.textSecondary }}>Phone *</Label>
             <Input 
               value={formData.phone} 
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
               style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+              required
             />
           </div>
         </div>
@@ -960,12 +1070,17 @@ function SponsorForm({ sponsor, seasons, competitions, teams, onSubmit, isLoadin
 }
 
 function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTypes, onSubmit, isLoading }) {
+  const [currentUser, setCurrentUser] = React.useState(null);
+
+  React.useEffect(() => {
+    api.auth.me().then(u => setCurrentUser(u)).catch(() => {});
+  }, []);
+
   const [formData, setFormData] = useState({
     sponsor_id: payment?.sponsor_id || sponsor?.id || '',
     sponsor_name: payment?.sponsor_name || sponsor?.name || '',
-    agreed_amount: payment?.agreed_amount || 0,
     amount: payment?.amount || 0,
-    payment_date: payment?.payment_date || format(new Date(), 'yyyy-MM-dd'),
+    payment_date: payment?.payment_date ? (typeof payment.payment_date === 'string' && payment.payment_date.includes('T') ? payment.payment_date.split('T')[0] : payment.payment_date) : format(new Date(), 'yyyy-MM-dd'),
     season_id: payment?.season_id || seasons[0]?.id || '',
     season_name: payment?.season_name || seasons[0]?.name || '',
     sponsorship_level: payment?.sponsorship_level || 'Club',
@@ -977,53 +1092,43 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
     payment_method: payment?.payment_method || 'Bank Transfer',
     reference: payment?.reference || '',
     description: payment?.description || '',
-    notes: payment?.notes || ''
+    notes: payment?.notes || '',
+    created_by: payment?.created_by || ''
   });
 
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="space-y-4 pt-2">
-      <div className="space-y-3">
-        {/* Payment Details */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label style={{ color: colors.textSecondary }}>Agreed Amount (£)</Label>
-            <Input 
-              type="number"
-              step="0.01"
-              value={formData.agreed_amount} 
-              onChange={(e) => {
-                const agreed = parseFloat(e.target.value) || 0;
-                setFormData({ ...formData, agreed_amount: agreed, amount: agreed });
-              }}
-              placeholder="Contract amount"
-              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-            />
-          </div>
-          <div>
-            <Label style={{ color: colors.textSecondary }}>Amount Paid (£) *</Label>
-            <Input 
-              type="number"
-              step="0.01"
-              value={formData.amount} 
-              onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-              placeholder="Actual received"
-              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-              required
-            />
-          </div>
-        </div>
-        <div>
-          <Label style={{ color: colors.textSecondary }}>Payment Date *</Label>
-          <Input 
-            type="date"
-            value={formData.payment_date} 
-            onChange={(e) => setFormData({ ...formData, payment_date: e.target.value })}
-            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-            required
-          />
-        </div>
+  const { data: allPayments = [] } = useQuery({
+    queryKey: ['sponsorPayments'],
+    queryFn: () => api.entities.SponsorPayment.list('-payment_date'),
+  });
 
-        {/* Sponsorship Context */}
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    
+    // Check for duplicate reference (only when reference is provided)
+    if (formData.reference && formData.reference.trim()) {
+      const isDuplicate = allPayments.some(p => 
+        p.reference && 
+        p.reference.toLowerCase().trim() === formData.reference.toLowerCase().trim() &&
+        p.id !== payment?.id
+      );
+      
+      if (isDuplicate) {
+        toast.error('Reference number already exists. Please use a different reference.');
+        return;
+      }
+    }
+    
+    const dataToSubmit = {
+      ...formData,
+      created_by: formData.created_by || currentUser?.email || 'unknown'
+    };
+    onSubmit(dataToSubmit);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+      <div className="space-y-3">
+        {/* Season & Sponsorship Level - TOP */}
         <div>
           <Label style={{ color: colors.textSecondary }}>Season *</Label>
           <Select 
@@ -1048,30 +1153,32 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
           </Select>
         </div>
 
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Sponsorship Level *</Label>
+          <Select 
+            value={formData.sponsorship_level} 
+            onValueChange={(v) => setFormData({ 
+              ...formData, 
+              sponsorship_level: v,
+              competition_id: v !== 'League' ? '' : formData.competition_id,
+              competition_name: v !== 'League' ? '' : formData.competition_name,
+              team_id: v !== 'Team' ? '' : formData.team_id,
+              team_name: v !== 'Team' ? '' : formData.team_name
+            })}
+          >
+            <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Club">Club Level</SelectItem>
+              <SelectItem value="League">League/Competition</SelectItem>
+              <SelectItem value="Team">Team Level</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Sponsor Type & Amount Paid - Side by side */}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label style={{ color: colors.textSecondary }}>Sponsorship Level *</Label>
-            <Select 
-              value={formData.sponsorship_level} 
-              onValueChange={(v) => setFormData({ 
-                ...formData, 
-                sponsorship_level: v,
-                competition_id: v !== 'League' ? '' : formData.competition_id,
-                competition_name: v !== 'League' ? '' : formData.competition_name,
-                team_id: v !== 'Team' ? '' : formData.team_id,
-                team_name: v !== 'Team' ? '' : formData.team_name
-              })}
-            >
-              <SelectTrigger style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Club">Club Level</SelectItem>
-                <SelectItem value="League">League/Competition</SelectItem>
-                <SelectItem value="Team">Team Level</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
           <div>
             <Label style={{ color: colors.textSecondary }}>Sponsor Type *</Label>
             <Select 
@@ -1081,7 +1188,7 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
                 setFormData({ 
                   ...formData, 
                   sponsor_type: v,
-                  agreed_amount: selectedType?.suggested_amount || formData.agreed_amount
+                  amount: payment ? formData.amount : (selectedType?.suggested_amount || 0)
                 });
               }}
             >
@@ -1097,6 +1204,33 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
               </SelectContent>
             </Select>
           </div>
+          <div>
+            <Label style={{ color: colors.textSecondary }}>Amount Paid (£) *</Label>
+            <Input 
+              type="number"
+              step="0.01"
+              min="0"
+              value={formData.amount || ''} 
+              onChange={(e) => {
+                const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                setFormData({ ...formData, amount: val });
+              }}
+              placeholder="Actual received"
+              style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <Label style={{ color: colors.textSecondary }}>Payment Date *</Label>
+          <Input 
+            type="date"
+            value={formData.payment_date} 
+            onChange={(e) => setFormData({ ...formData, payment_date: e.target.value })}
+            style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            required
+          />
         </div>
 
         {formData.sponsorship_level === 'League' && (
@@ -1179,24 +1313,26 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
             </Select>
           </div>
           <div>
-            <Label style={{ color: colors.textSecondary }}>Reference</Label>
+            <Label style={{ color: colors.textSecondary }}>Reference *</Label>
             <Input 
               value={formData.reference} 
               onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
               placeholder="Bank ref / Receipt no."
               style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+              required
             />
           </div>
         </div>
 
         <div>
-          <Label style={{ color: colors.textSecondary }}>Notes</Label>
+          <Label style={{ color: colors.textSecondary }}>Notes {payment ? '*' : ''}</Label>
           <Textarea 
             value={formData.notes} 
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
             rows={2}
             placeholder="Additional notes..."
             style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
+            required={!!payment}
           />
         </div>
       </div>
@@ -1209,10 +1345,17 @@ function PaymentForm({ payment, sponsor, seasons, competitions, teams, sponsorTy
 }
 
 function PaymentsList({ payments, sponsors, onEdit, onDelete, canManage }) {
+  const [filterSponsor, setFilterSponsor] = useState('all');
+
   const { data: sponsorTypes = [] } = useQuery({
     queryKey: ['sponsorTypes'],
     queryFn: () => api.entities.SponsorType.filter({ is_active: true }, 'display_order'),
   });
+
+  const filteredPayments = filterSponsor === 'all' 
+    ? payments 
+    : payments.filter(p => p.sponsor_id === filterSponsor);
+
   if (payments.length === 0) {
     return (
       <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
@@ -1225,10 +1368,28 @@ function PaymentsList({ payments, sponsors, onEdit, onDelete, canManage }) {
   }
 
   return (
-    <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
-      <CardContent className="p-0">
-        <div className="divide-y" style={{ borderColor: colors.border }}>
-          {payments.map(payment => {
+    <div className="space-y-4">
+      <div className="flex gap-3">
+        <Select value={filterSponsor} onValueChange={setFilterSponsor}>
+          <SelectTrigger className="w-64" style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}>
+            <SelectValue placeholder="Filter by sponsor" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Sponsors</SelectItem>
+            {sponsors.map(s => (
+              <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="flex-1 text-sm" style={{ color: colors.textMuted, paddingTop: '8px' }}>
+          Showing {filteredPayments.length} of {payments.length} payments
+        </div>
+      </div>
+
+      <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+        <CardContent className="p-0">
+          <div className="divide-y" style={{ borderColor: colors.border }}>
+            {filteredPayments.map(payment => {
             const sponsor = sponsors.find(s => s.id === payment.sponsor_id);
             return (
               <div key={payment.id} className="flex items-center justify-between p-4 hover:bg-white/[0.02]">
@@ -1273,13 +1434,8 @@ function PaymentsList({ payments, sponsors, onEdit, onDelete, canManage }) {
                 <div className="flex items-center gap-3 ml-4">
                   <div className="text-right">
                     <p className="font-semibold" style={{ color: colors.textProfit }}>
-                      {formatCurrency(payment.amount)}
+                      £{(parseFloat(payment.amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
-                    {payment.agreed_amount && parseFloat(payment.agreed_amount) !== parseFloat(payment.amount) && (
-                      <p className="text-xs" style={{ color: colors.textMuted }}>
-                        of {formatCurrency(payment.agreed_amount)} agreed
-                      </p>
-                    )}
                     {payment.reference && (
                       <p className="text-xs" style={{ color: colors.textMuted }}>Ref: {payment.reference}</p>
                     )}
@@ -1307,8 +1463,9 @@ function PaymentsList({ payments, sponsors, onEdit, onDelete, canManage }) {
                 </div>
                 );
                 })}
-        </div>
-      </CardContent>
-    </Card>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

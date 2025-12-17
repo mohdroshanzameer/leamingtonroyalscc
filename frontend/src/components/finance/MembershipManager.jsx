@@ -187,7 +187,7 @@ export default function MembershipManager() {
                       <td className="py-3 px-4 text-sm" style={{ color: colors.textSecondary }}>
                         {member.expiry_date ? format(new Date(member.expiry_date), 'dd MMM yyyy') : '-'}
                       </td>
-                      <td className="py-3 px-4 font-semibold" style={{ color: colors.textPrimary }}>£{member.fee_amount || 0}</td>
+                      <td className="py-3 px-4 font-semibold" style={{ color: colors.textPrimary }}>£{(parseFloat(member.fee_amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td className="py-3 px-4">
                         <Badge style={{ backgroundColor: paymentColors[member.payment_status]?.bg, color: paymentColors[member.payment_status]?.text }}>{member.payment_status}</Badge>
                       </td>
@@ -298,7 +298,13 @@ function MembershipForm({ membership, onSubmit, isLoading, settings }) {
         </div>
         <div className="space-y-2">
           <Label>Fee Amount (£)</Label>
-          <Input type="number" value={formData.fee_amount} onChange={(e) => setFormData({ ...formData, fee_amount: parseFloat(e.target.value) || 0 })} />
+          <Input 
+            type="number" 
+            step="0.01"
+            min="0"
+            value={formData.fee_amount || ''} 
+            onChange={(e) => setFormData({ ...formData, fee_amount: e.target.value === '' ? 0 : parseFloat(e.target.value) })} 
+          />
         </div>
         <div className="space-y-2">
           <Label>Payment Status</Label>

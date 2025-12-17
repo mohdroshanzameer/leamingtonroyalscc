@@ -379,12 +379,12 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
           <span className="text-sm" style={{ color: colors.textSecondary }}>
             <span className="font-semibold" style={{ color: colors.pending }}>{stats.pendingCount}</span> pending
           </span>
-          <span className="text-sm" style={{ color: colors.textMuted }}>({formatCurrency(stats.totalPending)})</span>
+          <span className="text-sm" style={{ color: colors.textMuted }}>(£{(parseFloat(stats.totalPending) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full" style={{ backgroundColor: colors.profit }} />
           <span className="text-sm" style={{ color: colors.textSecondary }}>
-            <span className="font-semibold" style={{ color: colors.profit }}>{formatCurrency(stats.totalVerified)}</span> verified
+            <span className="font-semibold" style={{ color: colors.profit }}>£{(parseFloat(stats.totalVerified) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> verified
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -482,7 +482,7 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
                             {/* Unpaid Total Header */}
                             <div className="px-4 py-3 flex justify-between items-center" style={{ backgroundColor: colors.lossLight }}>
                               <span className="text-sm font-medium" style={{ color: colors.textSecondary }}>Total Outstanding</span>
-                              <span className="font-bold text-lg" style={{ color: colors.loss }}>{formatCurrency(totalUnpaid)}</span>
+                              <span className="font-bold text-lg" style={{ color: colors.loss }}>£{(parseFloat(totalUnpaid) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </div>
                             {filteredUnpaidPlayers.map((player) => (
                               <div 
@@ -502,17 +502,17 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
                                     </p>
                                     <div className="flex flex-wrap items-center gap-2 mt-0.5">
                                       <span className="text-xs" style={{ color: colors.textMuted }}>
-                                        Charged: {formatCurrency(player.totalCharges)}
-                                      </span>
-                                      <span className="text-xs" style={{ color: colors.textMuted }}>•</span>
-                                      <span className="text-xs" style={{ color: colors.profit }}>
-                                        Paid: {formatCurrency(player.totalPayments)}
-                                      </span>
+                                         Charged: £{(parseFloat(player.totalCharges) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                       </span>
+                                       <span className="text-xs" style={{ color: colors.textMuted }}>•</span>
+                                       <span className="text-xs" style={{ color: colors.profit }}>
+                                         Paid: £{(parseFloat(player.totalPayments) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                       </span>
                                     </div>
                                   </div>
                                 </div>
                                 <span className="font-bold text-lg" style={{ color: colors.textLoss }}>
-                                  {formatCurrency(Math.abs(player.balance))}
+                                  £{(parseFloat(Math.abs(player.balance)) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </span>
                               </div>
                             ))}
@@ -555,7 +555,7 @@ export default function PaymentManager({ onRecordPayment, showSettingsButton = t
                           className="font-bold text-lg"
                           style={{ color: activeTab === 'verified' ? colors.textProfit : colors.textPrimary }}
                         >
-                          {formatCurrency(payment.amount)}
+                          £{(parseFloat(payment.amount) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>

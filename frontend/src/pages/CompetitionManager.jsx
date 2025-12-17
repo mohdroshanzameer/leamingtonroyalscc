@@ -18,6 +18,7 @@ import { Link } from 'react-router-dom';
 import { createPageUrl } from '../components/utils';
 import { toast } from 'sonner';
 import { getFinanceTheme } from '@/components/ClubConfig';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 const colors = getFinanceTheme();
 
@@ -41,6 +42,9 @@ export default function CompetitionManager() {
   const [editingComp, setEditingComp] = useState(null);
   const [compType, setCompType] = useState('league'); // 'league' or 'division'
   const [compForm, setCompForm] = useState({ name: '', short_name: '', parent_id: '', format: 'T20', status: 'Active', match_fee: 0 });
+  
+  // Confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
 
   // Fetch data
   const { data: seasons = [], isLoading: loadingSeasons } = useQuery({
@@ -82,6 +86,13 @@ export default function CompetitionManager() {
       queryClient.invalidateQueries({ queryKey: ['seasons'] });
       toast.success('Season deleted');
     },
+    onError: (error) => {
+      if (error.message?.includes('foreign key constraint')) {
+        toast.error('Cannot delete season - it has associated records (payments, tournaments, etc.)');
+      } else {
+        toast.error('Failed to delete season');
+      }
+    },
   });
 
   const compMutation = useMutation({
@@ -110,6 +121,13 @@ export default function CompetitionManager() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['competitions'] });
       toast.success('Competition deleted');
+    },
+    onError: (error) => {
+      if (error.message?.includes('foreign key constraint')) {
+        toast.error('Cannot delete competition - it has associated records (tournaments, payments, etc.)');
+      } else {
+        toast.error('Failed to delete competition');
+      }
     },
   });
 
@@ -255,7 +273,20 @@ export default function CompetitionManager() {
                           <Button variant="ghost" size="icon" onClick={() => openCompEdit(parent)} style={{ color: colors.textSecondary }}>
                             <Pencil className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => deleteCompMutation.mutate(parent.id)}>
+                          <Button variant="ghost" size="icon" onClick={() => {
+                            const subComps = getSubCompetitions(parent.id);
+                            const message = subComps.length > 0
+                              ? `This will delete "${parent.name}" and all ${subComps.length} sub-competition(s). Any associated tournaments, payments, and matches will also be affected. This action cannot be undone.`
+                              : `This will permanently delete "${parent.name}". Any associated tournaments, payments, and matches will also be affected. This action cannot be undone.`;
+                            setConfirmDialog({
+                              open: true,
+                              title: 'Delete Competition',
+                              message,
+                              onConfirm: () => deleteCompMutation.mutate(parent.id),
+                              confirmText: 'Delete Competition',
+                              variant: 'danger'
+                            });
+                          }}>
                             <Trash2 className="w-4 h-4 text-red-400" />
                           </Button>
                         </div>
@@ -274,7 +305,16 @@ export default function CompetitionManager() {
                                 <button onClick={() => openCompEdit(sub)} className="p-1 rounded" style={{ color: colors.textSecondary }}>
                                   <Pencil className="w-3 h-3" />
                                 </button>
-                                <button onClick={() => deleteCompMutation.mutate(sub.id)} className="p-1 rounded">
+                                <button onClick={() => {
+                                  setConfirmDialog({
+                                    open: true,
+                                    title: 'Delete Sub-Competition',
+                                    message: `This will permanently delete "${sub.name}". Any associated tournaments, payments, and matches will also be affected. This action cannot be undone.`,
+                                    onConfirm: () => deleteCompMutation.mutate(sub.id),
+                                    confirmText: 'Delete Sub-Competition',
+                                    variant: 'danger'
+                                  });
+                                }} className="p-1 rounded">
                                   <Trash2 className="w-3 h-3 text-red-400" />
                                 </button>
                               </div>
@@ -301,7 +341,16 @@ export default function CompetitionManager() {
                               <button onClick={() => openCompEdit(comp)} className="p-1 rounded" style={{ color: colors.textSecondary }}>
                                 <Pencil className="w-3 h-3" />
                               </button>
-                              <button onClick={() => deleteCompMutation.mutate(comp.id)} className="p-1 rounded">
+                              <button onClick={() => {
+                                setConfirmDialog({
+                                  open: true,
+                                  title: 'Delete Competition',
+                                  message: `This will permanently delete "${comp.name}". Any associated tournaments, payments, and matches will also be affected. This action cannot be undone.`,
+                                  onConfirm: () => deleteCompMutation.mutate(comp.id),
+                                  confirmText: 'Delete Competition',
+                                  variant: 'danger'
+                                });
+                              }} className="p-1 rounded">
                                 <Trash2 className="w-3 h-3 text-red-400" />
                               </button>
                             </div>
@@ -352,7 +401,16 @@ export default function CompetitionManager() {
                         <Button variant="ghost" size="icon" onClick={() => openSeasonEdit(season)} style={{ color: colors.textSecondary }}>
                           <Pencil className="w-4 h-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteSeasonMutation.mutate(season.id)}>
+                        <Button variant="ghost" size="icon" onClick={() => {
+                          setConfirmDialog({
+                            open: true,
+                            title: 'Delete Season',
+                            message: `This will permanently delete the season "${season.name}". Any associated tournaments, payments, and matches will also be affected. This action cannot be undone.`,
+                            onConfirm: () => deleteSeasonMutation.mutate(season.id),
+                            confirmText: 'Delete Season',
+                            variant: 'danger'
+                          });
+                        }}>
                           <Trash2 className="w-4 h-4 text-red-400" />
                         </Button>
                       </div>
@@ -547,6 +605,17 @@ export default function CompetitionManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }

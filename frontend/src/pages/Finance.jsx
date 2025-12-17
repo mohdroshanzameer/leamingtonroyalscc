@@ -112,6 +112,16 @@ export default function Finance() {
     refetchOnMount: 'always',
   });
 
+  const { data: sponsorPayments = [] } = useQuery({
+    queryKey: ['sponsorPayments'],
+    queryFn: () => api.entities.SponsorPayment.list('-payment_date'),
+  });
+
+  const { data: sponsorTypes = [] } = useQuery({
+    queryKey: ['sponsorTypes'],
+    queryFn: () => api.entities.SponsorType.filter({ is_active: true }, 'display_order'),
+  });
+
   const { data: paymentAllocations = [] } = useQuery({
     queryKey: ['paymentAllocations'],
     queryFn: () => api.entities.PaymentAllocation.list('-created_date', 2000),
@@ -207,11 +217,38 @@ export default function Finance() {
     const completedTx = (transactions || []).filter(t => t.status === 'Completed' && !t.is_deleted);
     
     // All-time totals (only verified payments)
+    // NOTE: Sponsorships are in Transactions (category_name: 'Sponsorship'), so don't add them separately
     const allTimeTxIncome = completedTx.filter(t => t.type === 'Income').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
     const allTimeTxExpenses = completedTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
     const allTimePlayerPayments = (playerPayments || []).filter(p => p.verified).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
-    const balance = ((allTimeTxIncome || 0) + (allTimePlayerPayments || 0)) - (allTimeTxExpenses || 0);
-    const totalIncome = (allTimeTxIncome || 0) + (allTimePlayerPayments || 0);
+    
+    // For expected income: calculate unique sponsorships (one per sponsor+type+level+season)
+    const uniqueDeals = new Map();
+    (sponsorPayments || []).forEach(p => {
+      const key = `${p.sponsor_id}-${p.season_id || 'none'}-${p.sponsor_type}-${p.sponsorship_level}-${p.competition_id || 'none'}-${p.team_id || 'none'}`;
+      if (!uniqueDeals.has(key)) {
+        uniqueDeals.set(key, p);
+      }
+    });
+    
+    const sponsorshipExpectedTotal = Array.from(uniqueDeals.values()).reduce((sum, p) => {
+      const type = (sponsorTypes || []).find(t => t.name === p.sponsor_type);
+      return sum + (parseFloat(type?.suggested_amount) || 0);
+    }, 0);
+    
+    const sponsorshipReceivedTotal = (sponsorPayments || []).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const sponsorshipOutstanding = Math.max(0, sponsorshipExpectedTotal - sponsorshipReceivedTotal);
+    
+    const totalReceivedIncome = (allTimeTxIncome || 0) + (allTimePlayerPayments || 0);
+    const totalExpectedIncome = totalReceivedIncome + sponsorshipOutstanding;
+    
+    console.log('💰 Sponsorship Calc:', { 
+      uniqueDeals: uniqueDeals.size, 
+      expected: sponsorshipExpectedTotal, 
+      received: sponsorshipReceivedTotal, 
+      outstanding: sponsorshipOutstanding 
+    });
+    const balance = totalReceivedIncome - (allTimeTxExpenses || 0);
     const totalExpenses = allTimeTxExpenses || 0;
 
     // This month transactions
@@ -220,6 +257,7 @@ export default function Finance() {
     const thisMonthExpense = thisMonthTx.filter(t => t.type === 'Expense').reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
     
     // This month player payments (only verified)
+    // NOTE: Sponsorships already in thisMonthTxIncome, don't add separately
     const thisMonthPlayerPayments = (playerPayments || [])
       .filter(p => p.verified && p.payment_date && isWithinInterval(new Date(p.payment_date), { start: thisMonthStart, end: thisMonthEnd }))
       .reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
@@ -251,16 +289,18 @@ export default function Finance() {
     const activeMemberships = (memberships || []).filter(m => m.status === 'Active').length;
 
     return { 
-      totalIncome: totalIncome || 0, 
+      totalReceivedIncome: totalReceivedIncome || 0,
+      totalExpectedIncome: totalExpectedIncome || 0,
       totalExpenses: totalExpenses || 0, 
       balance: isNaN(balance) ? 0 : balance, 
       thisMonthIncome: thisMonthIncome || 0, 
       thisMonthExpense: thisMonthExpense || 0, 
       incomeTrend: isNaN(incomeTrend) ? 0 : incomeTrend, 
       monthlyData, 
-      activeMemberships 
+      activeMemberships,
+      sponsorshipOutstanding: sponsorshipOutstanding || 0
     };
-  }, [transactions, memberships, playerPayments]);
+  }, [transactions, memberships, playerPayments, sponsorPayments, sponsorTypes]);
 
   // Player balances from ledger
   const playerBalances = useMemo(() => {
@@ -349,6 +389,7 @@ export default function Finance() {
       }, [playerPayments]);
 
   // Recent activity (transactions + verified player payments) - must be before early returns
+  // NOTE: Sponsorships are already in Transactions, so we don't add them separately
   const allActivity = useMemo(() => {
     const paymentActivities = playerPayments.filter(p => p.verified).map(p => {
       const player = players.find(pl => pl.id === p.player_id);
@@ -357,8 +398,8 @@ export default function Finance() {
         type: 'Income',
         amount: p.amount,
         date: p.payment_date,
-        description: `Match fee - ${player?.player_name || 'Unknown'}`,
-        category_name: 'Match Fee',
+        description: `Player Payment - ${player?.player_name || 'Unknown'}`,
+        category_name: 'Player Payment',
         isPayment: true
       };
     });
@@ -820,8 +861,10 @@ export default function Finance() {
 
   const filteredActivity = activityFilter === 'all' 
     ? allActivity 
-    : activityFilter === 'matchfee'
+    : activityFilter === 'playerPayment'
     ? allActivity.filter(t => t.isPayment)
+    : activityFilter === 'sponsorship'
+    ? allActivity.filter(t => t.category_name === 'Sponsorship')
     : allActivity.filter(t => t.type === (activityFilter === 'income' ? 'Income' : 'Expense'));
   const recentTransactions = filteredActivity.slice(0, activityLimit);
   const owingPlayers = Object.entries(playerBalances)
@@ -908,8 +951,12 @@ export default function Finance() {
                 </div>
                 <div className="flex flex-wrap items-end gap-6">
                   <div>
-                    <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Total Income</p>
-                    <p className="text-lg font-bold font-mono" style={{ color: colors.textProfit }}>+{formatCurrency(stats.totalIncome)}</p>
+                    <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Expected Income</p>
+                    <p className="text-lg font-bold font-mono" style={{ color: colors.textSecondary }}>+{formatCurrency(stats.totalExpectedIncome)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Received Income</p>
+                    <p className="text-lg font-bold font-mono" style={{ color: colors.textProfit }}>+{formatCurrency(stats.totalReceivedIncome)}</p>
                   </div>
                   <div>
                     <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Total Expenses</p>
@@ -918,6 +965,10 @@ export default function Finance() {
                   <div>
                     <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Outstanding Fees</p>
                     <p className="text-lg font-bold font-mono" style={{ color: colors.pending }}>{formatCurrency(totalOutstandingAllFees)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: colors.textMuted }}>Outstanding Sponsorships</p>
+                    <p className="text-lg font-bold font-mono" style={{ color: colors.pending }}>{formatCurrency(stats.sponsorshipOutstanding || 0)}</p>
                   </div>
                 </div>
               </div>
@@ -1206,6 +1257,8 @@ export default function Finance() {
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="income">Income</SelectItem>
                     <SelectItem value="expense">Expense</SelectItem>
+                    <SelectItem value="playerPayment">Player Payments</SelectItem>
+                    <SelectItem value="sponsorship">Sponsorships</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
