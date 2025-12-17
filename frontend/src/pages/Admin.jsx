@@ -23,6 +23,7 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { canManagePlayers, canManageNews, canViewAdmin, getRoleLabel } from '../components/RoleAccess';
 import EventManager from '../components/admin/EventManager';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import NotificationManager from '../components/admin/NotificationManager';
 import UserManager from '../components/admin/UserManager';
 import PaymentSettingsManager from '../components/admin/PaymentSettingsManager';
@@ -372,6 +373,7 @@ export default function Admin() {
 function PlayersTab({ queryClient, canEdit }) {
   const [editingPlayer, setEditingPlayer] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
 
   // Get home team for players
   const { data: teams = [] } = useQuery({
@@ -478,7 +480,16 @@ function PlayersTab({ queryClient, canEdit }) {
                         variant="outline" 
                         size="icon"
                         className="h-8 w-8 text-red-600 hover:text-red-700"
-                        onClick={() => deleteMutation.mutate(player.id)}
+                        onClick={() => {
+                          setConfirmDialog({
+                            open: true,
+                            title: 'Delete Player',
+                            message: `Are you sure you want to delete ${player.player_name}? All player stats and records will be permanently removed. This action cannot be undone.`,
+                            onConfirm: () => deleteMutation.mutate(player.id),
+                            confirmText: 'Delete Player',
+                            variant: 'danger'
+                          });
+                        }}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -490,6 +501,15 @@ function PlayersTab({ queryClient, canEdit }) {
           </div>
         )}
       </CardContent>
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </Card>
   );
 }
@@ -594,6 +614,7 @@ function PlayerForm({ player, onSubmit, isLoading }) {
 function NewsTab({ queryClient, canEdit }) {
   const [editingNews, setEditingNews] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
 
   const { data: news = [], isLoading } = useQuery({
     queryKey: ['news'],
@@ -684,7 +705,16 @@ function NewsTab({ queryClient, canEdit }) {
                     <Button variant="outline" size="sm" onClick={() => { setEditingNews(article); setIsDialogOpen(true); }}>
                       <Edit className="w-4 h-4" />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => deleteMutation.mutate(article.id)} className="text-red-600 hover:text-red-700">
+                    <Button variant="outline" size="sm" onClick={() => {
+                      setConfirmDialog({
+                        open: true,
+                        title: 'Delete News Article',
+                        message: `Are you sure you want to delete "${article.title}"? This action cannot be undone.`,
+                        onConfirm: () => deleteMutation.mutate(article.id),
+                        confirmText: 'Delete Article',
+                        variant: 'danger'
+                      });
+                    }} className="text-red-600 hover:text-red-700">
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
@@ -694,6 +724,15 @@ function NewsTab({ queryClient, canEdit }) {
           </div>
         )}
       </CardContent>
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </Card>
   );
 }
@@ -761,6 +800,7 @@ function NewsForm({ article, onSubmit, isLoading }) {
 function GalleryTab({ queryClient, canEdit }) {
   const [editingImage, setEditingImage] = useState(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
 
   const { data: images = [], isLoading } = useQuery({
     queryKey: ['galleryImages'],
@@ -818,7 +858,16 @@ function GalleryTab({ queryClient, canEdit }) {
                 <img src={image.image_url} alt={image.title} className="w-full h-full object-cover" />
                 {canEdit && (
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <Button variant="destructive" size="sm" onClick={() => deleteMutation.mutate(image.id)}>
+                    <Button variant="destructive" size="sm" onClick={() => {
+                      setConfirmDialog({
+                        open: true,
+                        title: 'Delete Image',
+                        message: `Are you sure you want to delete this image${image.title ? ` "${image.title}"` : ''}? This action cannot be undone.`,
+                        onConfirm: () => deleteMutation.mutate(image.id),
+                        confirmText: 'Delete Image',
+                        variant: 'danger'
+                      });
+                    }}>
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
@@ -833,6 +882,15 @@ function GalleryTab({ queryClient, canEdit }) {
           </div>
         )}
       </CardContent>
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </Card>
   );
 }
