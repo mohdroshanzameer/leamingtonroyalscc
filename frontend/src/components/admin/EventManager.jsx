@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 import EventForm from '../events/EventForm';
 
 const statusColors = {
@@ -38,17 +39,18 @@ export default function EventManager() {
   const [viewingRsvps, setViewingRsvps] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
   const { data: events, isLoading } = useQuery({
     queryKey: ['adminEvents'],
-    queryFn: () => api.entities.Event.list('-date'),
+    queryFn: () => api.entities.Event.list('-date', 200),
     initialData: [],
   });
 
   const { data: allRsvps } = useQuery({
     queryKey: ['adminRsvps'],
-    queryFn: () => api.entities.EventRSVP.list(),
+    queryFn: () => api.entities.EventRSVP.list('-created_date', 1000),
     initialData: [],
   });
 
@@ -297,7 +299,16 @@ export default function EventManager() {
                               size="icon"
                               className="text-red-600 hover:text-red-700"
                               onClick={() => {
-                                if (confirm('Delete this event?')) deleteMutation.mutate(event.id);
+                                const stats = rsvpStats[event.id] || { going: 0, maybe: 0, notGoing: 0 };
+                                const totalRsvps = stats.going + stats.maybe + stats.notGoing;
+                                setConfirmDialog({
+                                  open: true,
+                                  title: 'Delete Event',
+                                  message: `Are you sure you want to delete "${event.title}"?${totalRsvps > 0 ? ` This will also remove ${totalRsvps} RSVP record(s).` : ''} This action cannot be undone.`,
+                                  onConfirm: () => deleteMutation.mutate(event.id),
+                                  confirmText: 'Delete Event',
+                                  variant: 'danger'
+                                });
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -357,6 +368,17 @@ export default function EventManager() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText || 'Confirm'}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant || 'danger'}
+      />
     </div>
   );
 }
