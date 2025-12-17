@@ -1,399 +1,374 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '@/components/api/apiClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2, Shield, Plus, Search, Users, Filter } from 'lucide-react';
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { 
-  Loader2, Plus, Building2, Pencil, Trash2, CheckCircle, 
-  ChevronLeft, CreditCard
-} from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { canViewAdmin } from '../components/RoleAccess';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
-import { createPageUrl } from '../components/utils';
-import { getFinanceTheme, formatCurrency } from '@/components/ClubConfig';
-import { maskAccountNumber, maskSortCode } from '@/components/security/DataMasking';
-import { validateFormData, isValidSortCode, isValidAccountNumber } from '@/components/security/InputValidator';
-import { ActivityLogger } from '@/components/logging/AuditLogger';
+import { getFinanceTheme } from '@/components/ClubConfig';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
+
+import TeamCard from '../components/teams/TeamCard';
+import TeamForm from '../components/teams/TeamForm';
+import TeamDetails from '../components/teams/TeamDetails';
+import PlayerForm from '../components/teams/PlayerForm';
 
 const colors = getFinanceTheme();
 
-export default function BankAccounts() {
-  const [showForm, setShowForm] = useState(false);
-  const [editingAccount, setEditingAccount] = useState(null);
-  const [formData, setFormData] = useState({
-    bank_name: '',
-    account_name: '',
-    account_number: '',
-    sort_code: '',
-    is_active: true
-  });
+export default function Teams() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedTeam, setSelectedTeam] = useState(null);
+  const [showTeamForm, setShowTeamForm] = useState(false);
+  const [editingTeam, setEditingTeam] = useState(null);
+  const [showPlayerForm, setShowPlayerForm] = useState(false);
+  const [editingPlayer, setEditingPlayer] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: () => {} });
   const queryClient = useQueryClient();
 
-  const { data: accounts = [], isLoading } = useQuery({
-    queryKey: ['bankAccounts'],
-    queryFn: () => api.entities.PaymentSettings.list('-created_date'),
-  });
-
-  const [user, setUser] = React.useState(null);
-  const [validationErrors, setValidationErrors] = React.useState({});
-
-  React.useEffect(() => {
-    api.auth.me().then(setUser).catch(() => {});
+  useEffect(() => {
+    api.auth.me()
+      .then(setUser)
+      .catch(() => api.auth.redirectToLogin())
+      .finally(() => setLoading(false));
   }, []);
 
-  const createMutation = useMutation({
-    mutationFn: (data) => api.entities.PaymentSettings.create(data),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['bankAccounts'] });
-      queryClient.invalidateQueries({ queryKey: ['paymentSettings'] });
-      ActivityLogger.logCreate('PaymentSettings', result.id, formData.bank_name, user);
-      resetForm();
-      toast.success('Bank account added');
-    },
+  // Fetch teams
+  const { data: teams = [], isLoading: teamsLoading } = useQuery({
+    queryKey: ['teams'],
+    queryFn: () => api.entities.Team.list('name', 100),
+    staleTime: 0,
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => api.entities.PaymentSettings.update(id, data),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['bankAccounts'] });
-      queryClient.invalidateQueries({ queryKey: ['paymentSettings'] });
-      ActivityLogger.logUpdate('PaymentSettings', variables.id, formData.bank_name, user);
-      resetForm();
-      toast.success('Bank account updated');
-    },
+  // Fetch all team players
+  const { data: allPlayers = [] } = useQuery({
+    queryKey: ['allTeamPlayers'],
+    queryFn: () => api.entities.TeamPlayer.list('player_name', 500),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id) => api.entities.PaymentSettings.delete(id),
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: ['bankAccounts'] });
-      queryClient.invalidateQueries({ queryKey: ['paymentSettings'] });
-      ActivityLogger.logDelete('PaymentSettings', id, 'Bank account', user);
-      toast.success('Bank account deleted');
-    },
+  // Fetch matches for stats
+  const { data: matches = [] } = useQuery({
+    queryKey: ['teamMatches'],
+    queryFn: () => api.entities.TournamentMatch.list('-match_date', 300),
   });
 
-  const setActiveMutation = useMutation({
-    mutationFn: async (accountId) => {
-      // Deactivate all other accounts
-      for (const acc of accounts) {
-        if (acc.id !== accountId && acc.is_active) {
-          await api.entities.PaymentSettings.update(acc.id, { is_active: false });
-        }
+  // Get players for selected team
+  const selectedTeamPlayers = allPlayers.filter(p => p.team_id === selectedTeam?.id);
+
+  // Get player count per team
+  const getPlayerCount = (teamId) => allPlayers.filter(p => p.team_id === teamId).length;
+
+  // Filter teams
+  const filteredTeams = teams.filter(team => {
+    const matchesSearch = team.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         team.short_name?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || team.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  // Team mutations
+  const createTeamMutation = useMutation({
+    mutationFn: (data) => api.entities.Team.create(data),
+    onSuccess: (newTeam) => {
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      setShowTeamForm(false);
+      setSelectedTeam(newTeam);
+      toast.success('Team created successfully');
+    },
+    onError: (error) => toast.error('Failed to create team: ' + error.message),
+  });
+
+  const updateTeamMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.Team.update(id, data),
+    onSuccess: (updatedTeam) => {
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      setShowTeamForm(false);
+      setEditingTeam(null);
+      if (selectedTeam?.id === updatedTeam.id) {
+        setSelectedTeam(updatedTeam);
       }
-      // Activate selected account
-      await api.entities.PaymentSettings.update(accountId, { is_active: true });
+      toast.success('Team updated');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bankAccounts'] });
-      queryClient.invalidateQueries({ queryKey: ['paymentSettings'] });
-      toast.success('Active account updated');
-    },
+    onError: (error) => toast.error('Failed to update team: ' + error.message),
   });
 
-  const resetForm = () => {
-    setFormData({ bank_name: '', account_name: '', account_number: '', sort_code: '', is_active: true });
-    setEditingAccount(null);
-    setShowForm(false);
-  };
+  const deleteTeamMutation = useMutation({
+    mutationFn: (id) => api.entities.Team.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      setSelectedTeam(null);
+      toast.success('Team deleted');
+    },
+    onError: (error) => toast.error('Failed to delete team: ' + error.message),
+  });
 
-  const handleEdit = (account) => {
-    setFormData({
-      bank_name: account.bank_name || '',
-      account_name: account.account_name || '',
-      account_number: account.account_number || '',
-      sort_code: account.sort_code || '',
-      is_active: account.is_active ?? true
-    });
-    setEditingAccount(account);
-    setShowForm(true);
-  };
+  // Player mutations
+  const createPlayerMutation = useMutation({
+    mutationFn: (data) => api.entities.TeamPlayer.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allTeamPlayers'] });
+      setShowPlayerForm(false);
+      toast.success('Player added');
+    },
+    onError: (error) => toast.error('Failed to add player: ' + error.message),
+  });
 
-  const handleSubmit = () => {
-    // Validate form data
-    const validation = validateFormData(formData, {
-      bank_name: { required: true, label: 'Bank name', minLength: 2, maxLength: 50 },
-      account_name: { label: 'Account name', maxLength: 100 },
-      account_number: { required: true, type: 'accountNumber', label: 'Account number' },
-      sort_code: { type: 'sortCode', label: 'Sort code' }
-    });
-    
-    if (!validation.isValid) {
-      setValidationErrors(validation.errors);
-      const firstError = Object.values(validation.errors)[0];
-      toast.error(firstError);
-      return;
-    }
-    
-    setValidationErrors({});
-    if (editingAccount) {
-      updateMutation.mutate({ id: editingAccount.id, data: formData });
+  const updatePlayerMutation = useMutation({
+    mutationFn: ({ id, data }) => api.entities.TeamPlayer.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allTeamPlayers'] });
+      setShowPlayerForm(false);
+      setEditingPlayer(null);
+      toast.success('Player updated');
+    },
+    onError: (error) => toast.error('Failed to update player: ' + error.message),
+  });
+
+  const deletePlayerMutation = useMutation({
+    mutationFn: (id) => api.entities.TeamPlayer.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allTeamPlayers'] });
+      toast.success('Player removed');
+    },
+    onError: (error) => toast.error('Failed to remove player: ' + error.message),
+  });
+
+  // Handlers
+  const handleSaveTeam = (data) => {
+    if (editingTeam) {
+      updateTeamMutation.mutate({ id: editingTeam.id, data });
     } else {
-      createMutation.mutate(formData);
+      createTeamMutation.mutate(data);
     }
   };
 
-  const activeAccount = accounts.find(a => a.is_active);
+  const handleSavePlayer = (data) => {
+    if (editingPlayer) {
+      updatePlayerMutation.mutate({ id: editingPlayer.id, data });
+    } else {
+      createPlayerMutation.mutate(data);
+    }
+  };
 
-  const toggleStripeMutation = useMutation({
-    mutationFn: async (enabled) => {
-      if (activeAccount) {
-        return api.entities.PaymentSettings.update(activeAccount.id, { use_stripe: enabled });
-      } else if (accounts.length > 0) {
-        return api.entities.PaymentSettings.update(accounts[0].id, { use_stripe: enabled });
-      }
-      return api.entities.PaymentSettings.create({ use_stripe: enabled });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bankAccounts'] });
-      queryClient.invalidateQueries({ queryKey: ['paymentSettings'] });
-      toast.success('Stripe settings updated');
-    },
-  });
+  const handleDeleteTeam = () => {
+    if (!selectedTeam) return;
+    const playerCount = selectedTeamPlayers.length;
+    setConfirmDialog({
+      open: true,
+      title: 'Delete Team',
+      message: `Are you sure you want to delete "${selectedTeam.name}"?${playerCount > 0 ? ` All ${playerCount} player(s) will also be removed.` : ''} This action cannot be undone.`,
+      onConfirm: async () => {
+        // Delete players first, then team
+        for (const p of selectedTeamPlayers) {
+          await api.entities.TeamPlayer.delete(p.id);
+        }
+        deleteTeamMutation.mutate(selectedTeam.id);
+      },
+      confirmText: 'Delete Team',
+      variant: 'danger'
+    });
+  };
 
-  const stripeEnabled = activeAccount?.use_stripe || accounts.some(a => a.use_stripe);
+  const handleDeletePlayer = (player) => {
+    setConfirmDialog({
+      open: true,
+      title: 'Remove Player',
+      message: `Are you sure you want to remove ${player.player_name} from ${selectedTeam?.name || 'the team'}? All player stats and records will be removed. This action cannot be undone.`,
+      onConfirm: () => deletePlayerMutation.mutate(player.id),
+      confirmText: 'Remove Player',
+      variant: 'danger'
+    });
+  };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: colors.background }}>
+        <Loader2 className="w-8 h-8 animate-spin" style={{ color: colors.accent }} />
+      </div>
+    );
+  }
+
+  // Auth check
+  if (!user || !canViewAdmin(user)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center pt-20" style={{ backgroundColor: colors.background }}>
+        <Card className="max-w-md" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+          <CardContent className="p-8 text-center">
+            <Shield className="w-12 h-12 mx-auto mb-4" style={{ color: colors.textMuted }} />
+            <h2 className="text-xl font-semibold mb-2" style={{ color: colors.textPrimary }}>Access Denied</h2>
+            <p style={{ color: colors.textMuted }}>Only admins can manage teams.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen pt-20 lg:pt-4 pb-12" style={{ backgroundColor: colors.background }}>
-      <div className="max-w-4xl lg:max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <Link 
-              to={createPageUrl('Finance')}
-              className="w-10 h-10 rounded-xl flex items-center justify-center transition-all hover:opacity-80"
-              style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
-            >
-              <ChevronLeft className="w-5 h-5" style={{ color: colors.textSecondary }} />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold" style={{ color: colors.textPrimary }}>Bank Accounts</h1>
-              <p className="text-xs" style={{ color: colors.textMuted }}>Manage payment bank accounts</p>
+    <div className="min-h-screen pt-16 pb-12" style={{ backgroundColor: colors.background }}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        
+        {selectedTeam ? (
+          <TeamDetails
+            team={selectedTeam}
+            players={selectedTeamPlayers}
+            matches={matches}
+            onBack={() => setSelectedTeam(null)}
+            onEditTeam={() => { setEditingTeam(selectedTeam); setShowTeamForm(true); }}
+            onDeleteTeam={handleDeleteTeam}
+            onAddPlayer={() => { setEditingPlayer(null); setShowPlayerForm(true); }}
+            onEditPlayer={(player) => { setEditingPlayer(player); setShowPlayerForm(true); }}
+            onDeletePlayer={handleDeletePlayer}
+          />
+        ) : (
+          <>
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h1 className="text-3xl font-bold" style={{ color: colors.textPrimary }}>Team Management</h1>
+                <p style={{ color: colors.textSecondary }}>Manage your teams, rosters, and players</p>
+              </div>
+              <Button 
+                onClick={() => { setEditingTeam(null); setShowTeamForm(true); }}
+                style={{ background: colors.gradientProfit }}
+                className="text-white font-semibold"
+              >
+                <Plus className="w-4 h-4 mr-2" /> Create Team
+              </Button>
             </div>
-          </div>
-          <Button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2"
-            style={{ background: colors.gradientProfit }}
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Add Account</span>
-          </Button>
-        </div>
 
-        {/* Stripe Toggle */}
-        <Card className="mb-6 border-0" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #635bff 0%, #8b5cf6 100%)' }}>
-                  <CreditCard className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <p className="font-semibold" style={{ color: colors.textPrimary }}>Stripe Payments</p>
-                  <p className="text-xs" style={{ color: colors.textMuted }}>Enable online card payments via Stripe</p>
-                </div>
-              </div>
-              <Switch 
-                checked={stripeEnabled} 
-                onCheckedChange={(v) => toggleStripeMutation.mutate(v)}
-                disabled={toggleStripeMutation.isPending}
-              />
+            {/* Stats Summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold" style={{ color: colors.info }}>{teams.length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Total Teams</p>
+                </CardContent>
+              </Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold" style={{ color: colors.profit }}>{teams.filter(t => t.status === 'Active' || !t.status).length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Active Teams</p>
+                </CardContent>
+              </Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold" style={{ color: colors.chart2 }}>{allPlayers.length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Total Players</p>
+                </CardContent>
+              </Card>
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold" style={{ color: colors.pending }}>{teams.filter(t => t.is_home_team).length}</p>
+                  <p className="text-sm" style={{ color: colors.textMuted }}>Home Teams</p>
+                </CardContent>
+              </Card>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Active Account Highlight */}
-        {activeAccount && (
-          <Card className="mb-6 border-0" style={{ backgroundColor: colors.surface, border: `2px solid ${colors.profit}` }}>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: colors.profitLight }}>
-                    <CheckCircle className="w-5 h-5" style={{ color: colors.profit }} />
+            {/* Filters */}
+            <Card className="mb-6" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input 
+                      placeholder="Search teams..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                    />
                   </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-wider" style={{ color: colors.profit }}>Active Account</p>
-                    <p className="font-semibold" style={{ color: colors.textPrimary }}>{activeAccount.bank_name}</p>
-                    <p className="text-sm" style={{ color: colors.textSecondary }}>{activeAccount.account_name} • {maskAccountNumber(activeAccount.account_number)}</p>
-                  </div>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-full sm:w-40">
+                      <Filter className="w-4 h-4 mr-2" />
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Status</SelectItem>
+                      <SelectItem value="Active">Active</SelectItem>
+                      <SelectItem value="Inactive">Inactive</SelectItem>
+                      <SelectItem value="Archived">Archived</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Badge style={{ backgroundColor: colors.profitLight, color: colors.profit }}>
-                  Used for Stripe
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+              </CardContent>
+            </Card>
 
-        {/* Accounts List */}
-        <Card className="border-0" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
-          <CardHeader>
-            <CardTitle className="text-lg" style={{ color: colors.textPrimary }}>All Bank Accounts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="w-6 h-6 animate-spin" style={{ color: colors.accent }} />
-              </div>
-            ) : accounts.length === 0 ? (
+            {/* Teams Grid */}
+            {teamsLoading ? (
               <div className="text-center py-12">
-                <Building2 className="w-12 h-12 mx-auto mb-4" style={{ color: colors.textMuted }} />
-                <p style={{ color: colors.textMuted }}>No bank accounts added yet</p>
-                <Button onClick={() => setShowForm(true)} className="mt-4" style={{ background: colors.gradientProfit }}>
-                  <Plus className="w-4 h-4 mr-2" /> Add Your First Account
-                </Button>
+                <Loader2 className="w-8 h-8 animate-spin mx-auto" style={{ color: colors.accent }} />
               </div>
-            ) : (
-              <div className="space-y-3">
-                {accounts.map((account) => (
-                  <div 
-                    key={account.id} 
-                    className="p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                    style={{ backgroundColor: colors.surfaceHover }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div 
-                        className="w-10 h-10 rounded-xl flex items-center justify-center"
-                        style={{ backgroundColor: account.is_active ? colors.profitLight : colors.background }}
-                      >
-                        <Building2 className="w-5 h-5" style={{ color: account.is_active ? colors.profit : colors.textMuted }} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium" style={{ color: colors.textPrimary }}>{account.bank_name}</p>
-                          {account.is_active && (
-                            <Badge className="text-[10px]" style={{ backgroundColor: colors.profitLight, color: colors.profit }}>Active</Badge>
-                          )}
-                        </div>
-                        <p className="text-sm" style={{ color: colors.textSecondary }}>
-                          {account.account_name} • {maskSortCode(account.sort_code)} • {maskAccountNumber(account.account_number)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 ml-auto">
-                      {!account.is_active && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => setActiveMutation.mutate(account.id)}
-                          disabled={setActiveMutation.isPending}
-                          style={{ borderColor: colors.profit, color: colors.profit }}
-                        >
-                          Set Active
-                        </Button>
-                      )}
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => handleEdit(account)}
-                        style={{ borderColor: colors.border, color: colors.textSecondary }}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => deleteMutation.mutate(account.id)}
-                        disabled={deleteMutation.isPending}
-                        style={{ borderColor: colors.loss, color: colors.loss }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
+            ) : filteredTeams.length > 0 ? (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredTeams.map(team => (
+                  <TeamCard
+                    key={team.id}
+                    team={team}
+                    playerCount={getPlayerCount(team.id)}
+                    onClick={() => setSelectedTeam(team)}
+                    onEdit={(t) => { setEditingTeam(t); setShowTeamForm(true); }}
+                    onDelete={(t) => { setSelectedTeam(t); handleDeleteTeam(); }}
+                    onView={(t) => setSelectedTeam(t)}
+                  />
                 ))}
               </div>
+            ) : (
+              <Card style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+                <CardContent className="py-16 text-center">
+                  <Users className="w-16 h-16 mx-auto mb-4" style={{ color: colors.textMuted }} />
+                  <h3 className="text-lg font-semibold mb-2" style={{ color: colors.textSecondary }}>No teams found</h3>
+                  <p className="mb-4" style={{ color: colors.textMuted }}>
+                    {searchQuery || statusFilter !== 'all' 
+                      ? 'Try adjusting your filters'
+                      : 'Get started by creating your first team'}
+                  </p>
+                  {!searchQuery && statusFilter === 'all' && (
+                    <Button onClick={() => setShowTeamForm(true)} style={{ background: colors.gradientProfit }} className="text-white font-semibold">
+                      <Plus className="w-4 h-4 mr-2" /> Create Team
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
             )}
-          </CardContent>
-        </Card>
+          </>
+        )}
 
-        {/* Add/Edit Dialog */}
-        <Dialog open={showForm} onOpenChange={(open) => { if (!open) resetForm(); else setShowForm(true); }}>
-          <DialogContent className="max-w-md" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
-            <DialogHeader>
-              <DialogTitle style={{ color: colors.textPrimary }}>
-                {editingAccount ? 'Edit Bank Account' : 'Add Bank Account'}
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label style={{ color: colors.textMuted }}>Bank Name *</Label>
-                <Input 
-                  value={formData.bank_name} 
-                  onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
-                  placeholder="e.g., Barclays, HSBC, Lloyds"
-                  style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label style={{ color: colors.textMuted }}>Account Name</Label>
-                <Input 
-                  value={formData.account_name} 
-                  onChange={(e) => setFormData({ ...formData, account_name: e.target.value })}
-                  placeholder="Account holder name"
-                  style={{ backgroundColor: colors.surfaceHover, borderColor: colors.border, color: colors.textPrimary }}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label style={{ color: validationErrors.account_number ? colors.loss : colors.textMuted }}>Account Number *</Label>
-                  <Input 
-                    value={formData.account_number} 
-                    onChange={(e) => setFormData({ ...formData, account_number: e.target.value })}
-                    placeholder="12345678"
-                    style={{ backgroundColor: colors.surfaceHover, borderColor: validationErrors.account_number ? colors.loss : colors.border, color: colors.textPrimary }}
-                  />
-                  {validationErrors.account_number && <p className="text-xs mt-1" style={{ color: colors.loss }}>{validationErrors.account_number}</p>}
-                </div>
-                <div className="space-y-2">
-                  <Label style={{ color: validationErrors.sort_code ? colors.loss : colors.textMuted }}>Sort Code</Label>
-                  <Input 
-                    value={formData.sort_code} 
-                    onChange={(e) => setFormData({ ...formData, sort_code: e.target.value })}
-                    placeholder="00-00-00"
-                    style={{ backgroundColor: colors.surfaceHover, borderColor: validationErrors.sort_code ? colors.loss : colors.border, color: colors.textPrimary }}
-                  />
-                  {validationErrors.sort_code && <p className="text-xs mt-1" style={{ color: colors.loss }}>{validationErrors.sort_code}</p>}
-                </div>
-              </div>
-              <div className="flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: colors.surfaceHover }}>
-                <div>
-                  <p className="font-medium text-sm" style={{ color: colors.textPrimary }}>Set as Active</p>
-                  <p className="text-xs" style={{ color: colors.textMuted }}>Use this account for payments</p>
-                </div>
-                <Switch 
-                  checked={formData.is_active} 
-                  onCheckedChange={(v) => setFormData({ ...formData, is_active: v })}
-                />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <Button 
-                  variant="outline" 
-                  onClick={resetForm} 
-                  className="flex-1"
-                  style={{ borderColor: colors.border, color: colors.textSecondary }}
-                >
-                  Cancel
-                </Button>
-                <Button 
-                  onClick={handleSubmit}
-                  disabled={createMutation.isPending || updateMutation.isPending}
-                  className="flex-1"
-                  style={{ background: colors.gradientProfit }}
-                >
-                  {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  {editingAccount ? 'Update' : 'Add Account'}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {/* Team Form Dialog */}
+        <TeamForm
+          open={showTeamForm}
+          onOpenChange={(open) => { setShowTeamForm(open); if (!open) setEditingTeam(null); }}
+          team={editingTeam}
+          onSave={handleSaveTeam}
+          isLoading={createTeamMutation.isPending || updateTeamMutation.isPending}
+        />
+
+        {/* Player Form Dialog */}
+        <PlayerForm
+          open={showPlayerForm}
+          onOpenChange={(open) => { setShowPlayerForm(open); if (!open) setEditingPlayer(null); }}
+          player={editingPlayer}
+          teamId={selectedTeam?.id}
+          teamName={selectedTeam?.name}
+          onSave={handleSavePlayer}
+          isLoading={createPlayerMutation.isPending || updatePlayerMutation.isPending}
+        />
+
+        {/* Confirmation Dialog */}
+        <ConfirmDialog
+          open={confirmDialog.open}
+          onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, open })}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText={confirmDialog.confirmText || 'Confirm'}
+          onConfirm={confirmDialog.onConfirm}
+          variant={confirmDialog.variant || 'danger'}
+        />
       </div>
     </div>
   );
